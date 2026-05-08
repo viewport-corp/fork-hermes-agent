@@ -2,6 +2,7 @@
 # Build context = upstream fork at /srv/viewport/forks/hermes-agent
 # Daemon = docker-viewport (DOCKER_HOST=unix:///var/run/docker-viewport.sock)
 # Network = bridge on dvp0 (NOT host mode — overrides upstream)
+# Auth = Codex OAuth via /srv/viewport/runtime/hermes/.codex/auth.json (chown 10000:10000)
 services:
   gateway:
     build:
@@ -15,15 +16,15 @@ services:
     environment:
       - HERMES_UID=10000
       - HERMES_GID=10000
-      - HERMES_HOME=/opt/data/.hermes
     volumes:
-      - hermes_data:/opt/data
-      - /root/.codex:/home/hermes/.codex:ro
+      - /srv/viewport/runtime/hermes:/opt/data
+    command: ["gateway", "run"]
     healthcheck:
-      test: ["CMD", "hermes", "status"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8642/health"]
       interval: 60s
       timeout: 10s
       retries: 3
+      start_period: 90s
     labels:
       - "viewport.tier=tier-0"
       - "viewport.role=operator-harness"
@@ -34,7 +35,3 @@ networks:
     driver: bridge
     driver_opts:
       com.docker.network.bridge.name: viewport0
-
-volumes:
-  hermes_data:
-    name: hermes_data
