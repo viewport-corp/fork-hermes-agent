@@ -64,16 +64,17 @@ RUN cd web && npm run build && \
     cd ../ui-tui && npm run build
 
 # ---------- Permissions ----------
-# Make install dir world-readable so any HERMES_UID can read it at runtime.
-# The venv needs to be traversable too.
 USER root
-RUN chmod -R a+rX /opt/hermes
+# Source, npm packages, and build artifacts already use readable default modes.
+# Avoid a full-tree chmod over node_modules/Playwright assets; on the viewport
+# staging host this wedged builds in disk I/O before an image could be produced.
 # Start as root so the entrypoint can usermod/groupmod + gosu.
 # If HERMES_UID is unset, the entrypoint drops to the default hermes user (10000).
 
 # ---------- Python virtualenv ----------
 RUN uv venv && \
-    uv pip install --no-cache-dir -e ".[all]"
+    uv pip install --no-cache-dir -e ".[all]" && \
+    chmod -R a+rX /opt/hermes/.venv
 
 # ---------- Runtime ----------
 ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist

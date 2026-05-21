@@ -3302,7 +3302,7 @@ def _runtime_health_lines() -> list[str]:
     platforms = state.get("platforms", {}) or {}
 
     for platform, pdata in platforms.items():
-        if pdata.get("state") == "fatal":
+        if pdata.get("state") in {"fatal", "degraded"}:
             message = pdata.get("error_message") or "unknown error"
             lines.append(f"⚠ {platform}: {message}")
 
