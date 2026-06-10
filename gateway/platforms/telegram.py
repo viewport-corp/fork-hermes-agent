@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 import html as _html
 import re
 from datetime import datetime, timezone
@@ -5154,6 +5155,141 @@ class TelegramAdapter(BasePlatformAdapter):
             adapter_name = getattr(self, "name", "telegram")
             logger.warning("[%s] Failed to observe Telegram group message: %s", adapter_name, exc)
 
+    def _telegram_bot_to_bot_settings(self) -> Dict[str, Any]:
+        """Resolve loop-protection settings for Bot API 10.0 bot-to-bot messages.
+
+        Telegram requires bots to implement their own loop protection once
+        Bot-to-Bot Communication Mode is enabled in BotFather (dedup, rate
+        limits, conversation depth caps):
+        https://core.telegram.org/bots/features#bot-to-bot-communication
+
+        Configured via the platform ``extra`` block::
+
+            bot_to_bot:
+              enabled: true                # process messages from other bots
+              max_reply_depth: 8           # consecutive bot msgs per chat before muting
+              rate_limit_per_minute: 20    # bot msgs accepted per chat per minute
+
+        Env fallbacks: TELEGRAM_BOT_TO_BOT, TELEGRAM_BOT_TO_BOT_MAX_REPLY_DEPTH,
+        TELEGRAM_BOT_TO_BOT_RATE_LIMIT_PER_MINUTE.
+        """
+        raw = self.config.extra.get("bot_to_bot")
+        if not isinstance(raw, dict):
+            raw = {}
+        enabled = raw.get("enabled")
+        if enabled is None:
+            enabled = os.getenv("TELEGRAM_BOT_TO_BOT", "true")
+        if isinstance(enabled, str):
+            enabled = enabled.lower() in {"true", "1", "yes", "on"}
+
+        def _positive_int(value: Any, env_key: str, default: int) -> int:
+            if value is None:
+                value = os.getenv(env_key, "")
+            try:
+                parsed = int(str(value).strip())
+                if parsed > 0:
+                    return parsed
+            except (TypeError, ValueError):
+                pass
+            return default
+
+        return {
+            "enabled": bool(enabled),
+            "max_reply_depth": _positive_int(
+                raw.get("max_reply_depth"), "TELEGRAM_BOT_TO_BOT_MAX_REPLY_DEPTH", 8
+            ),
+            "rate_limit_per_minute": _positive_int(
+                raw.get("rate_limit_per_minute"),
+                "TELEGRAM_BOT_TO_BOT_RATE_LIMIT_PER_MINUTE",
+                20,
+            ),
+        }
+
+    def _bot_to_bot_guard_state(self) -> Dict[str, Any]:
+        """Lazily initialized loop-guard state (tests build adapters via __new__)."""
+        state = getattr(self, "_bot_to_bot_state", None)
+        if state is None:
+            state = {"seen": {}, "seen_order": [], "depth": {}, "window": {}}
+            self._bot_to_bot_state = state
+        return state
+
+    def _should_process_bot_message(self, message: Message) -> bool:
+        """Loop protection for messages authored by other bots.
+
+        With Bot API 10.0 Bot-to-Bot Communication Mode enabled, group
+        messages from peer bots arrive with ``from.is_bot=True`` and must
+        reach the agent — but only behind explicit loop guards:
+
+        - own-message guard (never react to our own messages),
+        - dedup by ``(chat_id, message_id)``,
+        - consecutive bot-reply depth cap per chat (reset by human messages),
+        - per-chat sliding-window rate limit.
+
+        Human-authored messages always pass and reset the depth counter.
+        """
+        user = getattr(message, "from_user", None)
+        chat_id = str(getattr(getattr(message, "chat", None), "id", ""))
+        # Strict identity check: Telegram's User.is_bot is a bool; anything
+        # else (mocks, missing field) is treated as a human sender — mirrors
+        # the `from?.is_bot === true` convention used by other gateways.
+        if getattr(user, "is_bot", False) is not True:
+            # A human message breaks any bot-to-bot exchange chain.
+            state = getattr(self, "_bot_to_bot_state", None)
+            if state:
+                state["depth"].pop(chat_id, None)
+            return True
+
+        settings = self._telegram_bot_to_bot_settings()
+        if not settings["enabled"]:
+            logger.debug("[%s] Dropping bot message (bot_to_bot disabled)", self.name)
+            return False
+
+        own_id = getattr(getattr(self, "_bot", None), "id", None)
+        sender_id = getattr(user, "id", None)
+        if own_id is not None and sender_id is not None and sender_id == own_id:
+            return False
+
+        state = self._bot_to_bot_guard_state()
+        message_id = getattr(message, "message_id", None)
+        if message_id is not None:
+            dedup_key = (chat_id, str(message_id))
+            if dedup_key in state["seen"]:
+                logger.debug(
+                    "[%s] Dropping duplicate bot message %s in chat %s", self.name, message_id, chat_id
+                )
+                return False
+            state["seen"][dedup_key] = True
+            state["seen_order"].append(dedup_key)
+            while len(state["seen_order"]) > 512:
+                state["seen"].pop(state["seen_order"].pop(0), None)
+
+        depth = state["depth"].get(chat_id, 0) + 1
+        if depth > settings["max_reply_depth"]:
+            logger.info(
+                "[%s] Bot-to-bot depth cap reached in chat %s (%d consecutive bot messages); "
+                "muting until a human message resets the chain",
+                self.name,
+                chat_id,
+                depth - 1,
+            )
+            return False
+        state["depth"][chat_id] = depth
+
+        now = time.monotonic()
+        window = [ts for ts in state["window"].get(chat_id, []) if now - ts < 60.0]
+        if len(window) >= settings["rate_limit_per_minute"]:
+            state["window"][chat_id] = window
+            logger.info(
+                "[%s] Bot-to-bot rate limit hit in chat %s (%d bot messages/min); dropping message",
+                self.name,
+                chat_id,
+                settings["rate_limit_per_minute"],
+            )
+            return False
+        window.append(now)
+        state["window"][chat_id] = window
+        return True
+
     def _should_process_message(self, message: Message, *, is_command: bool = False) -> bool:
         """Apply Telegram group trigger rules.
 
@@ -5175,7 +5311,13 @@ class TelegramAdapter(BasePlatformAdapter):
         the Telegram bot menu (``/command@botname``) or by explicitly
         mentioning the bot (``@botname /command``), both of which are
         recognised as mentions by :meth:`_message_mentions_bot`.
+
+        Messages authored by other bots (``from.is_bot=True``, Bot API 10.0
+        bot-to-bot mode) pass through the same trigger rules but must first
+        clear the loop guards in :meth:`_should_process_bot_message`.
         """
+        if not self._should_process_bot_message(message):
+            return False
         if not self._is_group_chat(message):
             return True
 
