@@ -119,11 +119,16 @@ COPY ui-tui/packages/hermes-ink/ ui-tui/packages/hermes-ink/
 # guards against a future regression if the source npm version changes.
 ENV npm_config_install_links=false
 
-RUN npm install --prefer-offline --no-audit && \
-    npx playwright install --with-deps chromium --only-shell && \
-    (cd web && npm install --prefer-offline --no-audit) && \
-    (cd ui-tui && npm install --prefer-offline --no-audit) && \
-    npm cache clean --force
+# Network-resilience: generous fetch retries (npm docs: env npm_config_* = config),
+# and one RUN per install so a transient failure only re-runs its own layer.
+ENV npm_config_fetch_retries=5 \
+    npm_config_fetch_retry_mintimeout=20000 \
+    npm_config_fetch_retry_maxtimeout=120000
+
+RUN npm install --prefer-offline --no-audit
+RUN npx playwright install --with-deps chromium --only-shell
+RUN cd web && npm install --prefer-offline --no-audit
+RUN cd ui-tui && npm install --prefer-offline --no-audit && npm cache clean --force
 
 # ---------- Layer-cached Python dependency install ----------
 # Copy only pyproject.toml + uv.lock so the Python dep resolve + wheel
