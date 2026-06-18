@@ -5877,6 +5877,25 @@ def resolve_external_process_provider_credentials(provider_id: str) -> Dict[str,
             code="invalid_provider",
         )
 
+    # anthropic-cli drives the real ``claude -p`` binary as a subprocess and
+    # resolves its OWN binary inside the transport layer
+    # (agent/transports/anthropic_cli_session.py) via
+    # HERMES_CLAUDE_CLI_BIN / model.anthropic_cli_bin / which("claude"),
+    # authenticating off CLAUDE_CODE_OAUTH_TOKEN. It must NOT be forced through
+    # the Copilot CLI resolution below (which would raise
+    # "Could not find the Copilot CLI command copilot."). Return minimal
+    # process creds and let the transport own binary/token resolution.
+    if provider_id == "anthropic-cli":
+        cli_bin = os.getenv("HERMES_CLAUDE_CLI_BIN", "").strip() or "claude"
+        return {
+            "provider": provider_id,
+            "api_key": "external-process",
+            "base_url": "",
+            "command": cli_bin,
+            "args": [],
+            "source": "process",
+        }
+
     base_url = os.getenv(pconfig.base_url_env_var, "").strip() if pconfig.base_url_env_var else ""
     if not base_url:
         base_url = pconfig.inference_base_url

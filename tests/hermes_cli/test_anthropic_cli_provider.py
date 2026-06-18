@@ -205,3 +205,85 @@ class TestAnthropicCliRuntimeFallback:
         assert result["partial"] is True
         assert "auth expired" in result["error"]
         assert result["api_calls"] == 0
+
+
+# ── Regression: anthropic-cli must NOT hit the Copilot credential path ───
+# See fork issue #13. Prior to the fix, anthropic-cli (an external_process
+# provider) fell through to resolve_external_process_provider_credentials(),
+# which is hardcoded for Copilot and raised
+#   AuthError("Could not find the Copilot CLI command copilot.")
+# at agent-init on every turn.
+
+
+class TestAnthropicCliNotCopilotCredentialPath:
+    def test_resolve_external_process_creds_does_not_raise_copilot_error(
+        self, monkeypatch
+    ):
+        """anthropic-cli must resolve to process creds without requiring the
+        copilot binary, even when no `copilot` is on PATH."""
+        from hermes_cli import auth
+
+        # Ensure neither a copilot binary nor copilot env vars are present.
+        monkeypatch.delenv("HERMES_COPILOT_ACP_COMMAND", raising=False)
+        monkeypatch.delenv("COPILOT_CLI_PATH", raising=False)
+        monkeypatch.setattr(auth.shutil, "which", lambda *_a, **_k: None)
+
+        creds = auth.resolve_external_process_provider_credentials("anthropic-cli")
+        assert creds["provider"] == "anthropic-cli"
+        assert creds["source"] == "process"
+        # Must NOT carry copilot-acp markers.
+        assert creds["api_key"] != "copilot-acp"
+        assert creds.get("base_url", "") == ""
+
+    def test_resolve_external_process_creds_honours_claude_bin_env(
+        self, monkeypatch
+    ):
+        from hermes_cli import auth
+
+        monkeypatch.setenv("HERMES_CLAUDE_CLI_BIN", "/host/srv/claude.exe")
+        monkeypatch.setattr(auth.shutil, "which", lambda *_a, **_k: None)
+        creds = auth.resolve_external_process_provider_credentials("anthropic-cli")
+        assert creds["command"] == "/host/srv/claude.exe"
+
+    def test_copilot_still_raises_when_binary_missing(self, monkeypatch):
+        """The fix must NOT regress copilot-acp: it should still raise the
+        missing-copilot error when no binary is found."""
+        from hermes_cli import auth
+        from hermes_cli.auth import AuthError
+
+        monkeypatch.delenv("HERMES_COPILOT_ACP_COMMAND", raising=False)
+        monkeypatch.delenv("COPILOT_CLI_PATH", raising=False)
+        monkeypatch.setattr(auth.shutil, "which", lambda *_a, **_k: None)
+
+        with pytest.raises(AuthError) as exc:
+            auth.resolve_external_process_provider_credentials("copilot-acp")
+        assert "copilot" in str(exc.value).lower()
+
+    def test_agent_init_anthropic_cli_skips_provider_client(self, monkeypatch):
+        """With api_mode == anthropic_cli, init must set agent.client = None
+        and never call resolve_provider_client (the copilot trap)."""
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "dummy-token")
+
+        import agent.auxiliary_client as aux
+
+        def fail(*_a, **_k):
+            raise AssertionError(
+                "resolve_provider_client must not be called for anthropic_cli"
+            )
+
+        monkeypatch.setattr(aux, "resolve_provider_client", fail)
+
+        from run_agent import AIAgent
+
+        # Explicit provider + api_mode, no api_key/base_url so the catch-all
+        # (copilot trap) would fire if the anthropic_cli branch were missing.
+        agent = AIAgent(
+            provider="anthropic-cli",
+            api_mode="anthropic_cli",
+            model="claude-sonnet-4-6",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+        assert agent.api_mode == "anthropic_cli"
+        assert agent.client is None
