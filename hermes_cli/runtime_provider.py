@@ -248,6 +248,9 @@ _VALID_API_MODES = {
     # `model.openai_runtime == "codex_app_server"` AND provider in
     # {"openai", "openai-codex"}. Default is unchanged.
     "codex_app_server",
+    # Drives the real ``claude -p`` CLI as a subprocess (provider
+    # "anthropic-cli"). See agent/anthropic_cli_runtime.py.
+    "anthropic_cli",
 }
 
 
@@ -333,6 +336,11 @@ def _resolve_runtime_from_pool_entry(
         if cfg_provider == "anthropic":
             cfg_base_url = str(model_cfg.get("base_url") or "").strip().rstrip("/")
         base_url = cfg_base_url or base_url or "https://api.anthropic.com"
+    elif provider == "anthropic-cli":
+        # Subprocess CLI runtime: drive ``claude -p`` directly. No HTTP
+        # base_url is used (the binary handles its own transport), so leave
+        # it untouched.
+        api_mode = "anthropic_cli"
     elif provider == "openrouter":
         base_url = base_url or OPENROUTER_BASE_URL
     elif provider == "xai":
@@ -1180,6 +1188,8 @@ def _resolve_explicit_runtime(
             api_mode = _copilot_runtime_api_mode(model_cfg, api_key)
         elif provider == "xai":
             api_mode = "codex_responses"
+        elif provider == "anthropic-cli":
+            api_mode = "anthropic_cli"
         else:
             configured_mode = _parse_api_mode(model_cfg.get("api_mode"))
             if configured_mode:
@@ -1620,6 +1630,8 @@ def resolve_runtime_provider(
             api_mode = _copilot_runtime_api_mode(model_cfg, creds.get("api_key", ""))
         elif provider == "xai":
             api_mode = "codex_responses"
+        elif provider == "anthropic-cli":
+            api_mode = "anthropic_cli"
         else:
             configured_provider = str(model_cfg.get("provider") or "").strip().lower()
             # Only honor persisted api_mode when it belongs to the same provider family.
