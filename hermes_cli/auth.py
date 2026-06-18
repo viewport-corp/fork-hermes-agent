@@ -229,6 +229,14 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         inference_base_url=DEFAULT_COPILOT_ACP_BASE_URL,
         base_url_env_var="COPILOT_ACP_BASE_URL",
     ),
+    "anthropic-cli": ProviderConfig(
+        id="anthropic-cli",
+        name="Anthropic Claude CLI (claude -p)",
+        # Subprocess provider: drives the local ``claude -p`` binary,
+        # authenticating off CLAUDE_CODE_OAUTH_TOKEN in the child env.
+        # No HTTP base_url is used (the binary handles its own transport).
+        auth_type="external_process",
+    ),
     "gemini": ProviderConfig(
         id="gemini",
         name="Google AI Studio",

@@ -1188,8 +1188,6 @@ def _resolve_explicit_runtime(
             api_mode = _copilot_runtime_api_mode(model_cfg, api_key)
         elif provider == "xai":
             api_mode = "codex_responses"
-        elif provider == "anthropic-cli":
-            api_mode = "anthropic_cli"
         else:
             configured_mode = _parse_api_mode(model_cfg.get("api_mode"))
             if configured_mode:
@@ -1282,6 +1280,20 @@ def resolve_runtime_provider(
         explicit_base_url=explicit_base_url,
     )
     model_cfg = _get_model_config()
+
+    # Subprocess CLI provider: drive the local ``claude -p`` binary. It is an
+    # external-process provider (no pool, no HTTP base_url, no api_key) that
+    # authenticates off CLAUDE_CODE_OAUTH_TOKEN in the child env, so resolve it
+    # here before the pool / api-key / openrouter fall-through paths.
+    if provider == "anthropic-cli":
+        return {
+            "provider": "anthropic-cli",
+            "api_mode": "anthropic_cli",
+            "base_url": "",
+            "api_key": "external-process",
+            "source": "process",
+            "requested_provider": requested_provider,
+        }
     explicit_runtime = _resolve_explicit_runtime(
         provider=provider,
         requested_provider=requested_provider,
@@ -1630,8 +1642,6 @@ def resolve_runtime_provider(
             api_mode = _copilot_runtime_api_mode(model_cfg, creds.get("api_key", ""))
         elif provider == "xai":
             api_mode = "codex_responses"
-        elif provider == "anthropic-cli":
-            api_mode = "anthropic_cli"
         else:
             configured_provider = str(model_cfg.get("provider") or "").strip().lower()
             # Only honor persisted api_mode when it belongs to the same provider family.
