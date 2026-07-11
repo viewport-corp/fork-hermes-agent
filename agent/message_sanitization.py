@@ -182,58 +182,6 @@ def _escape_invalid_chars_in_json_strings(raw: str) -> str:
     return "".join(out)
 
 
-def _collapse_repeated_json_arguments(raw_stripped: str) -> str | None:
-    """Collapse concatenated-duplicate tool-call argument JSON.
-
-    Some OpenAI-compatible streaming providers (DeepSeek / Baidu Qianfan
-    among them) resend the *full* cumulative ``arguments`` string in every
-    stream chunk instead of incremental fragments.  Our stream accumulator
-    concatenates argument deltas with ``+=`` (correct for spec-compliant
-    incremental providers), so a cumulative-resend provider yields the
-    object repeated once per chunk:
-
-        '{"path":"x"}{"path":"x"}{"path":"x"}...'
-
-    A spec-compliant provider always produces exactly one valid JSON object
-    after concatenation, so this function is only ever reached for strings
-    that already fail ``json.loads`` (issue #35592).
-
-    Detection is unambiguous and operates on the fully-accumulated string,
-    not on partial per-chunk data: the input must be K>=2 *exact* repeats of
-    a unit substring that itself parses as valid JSON.  Returns the single
-    collapsed unit (re-serialised compactly) when that holds, else ``None``
-    so the caller falls through to the generic repair passes.
-
-    Safety: a single object like ``{"command":{"command":"x"}}`` parses on
-    the first ``json.loads`` attempt in the caller and never reaches here;
-    even if it did, it is not an exact-repeat string, so this returns
-    ``None`` and leaves it untouched.
-    """
-    n = len(raw_stripped)
-    if n < 2:
-        return None
-    # The unit must divide the total length evenly for an exact K-repeat.
-    # Try the smallest plausible unit first (divisors of n, ascending),
-    # capping the repeat count so a pathological input can't blow up.
-    for unit_len in range(1, n // 2 + 1):
-        if n % unit_len != 0:
-            continue
-        k = n // unit_len
-        if k < 2:
-            continue
-        unit = raw_stripped[:unit_len]
-        if unit * k != raw_stripped:
-            continue
-        # The repeated unit must itself be valid JSON for this to be a
-        # cumulative-resend collapse and not a coincidental string repeat.
-        try:
-            parsed = json.loads(unit, strict=False)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        return json.dumps(parsed, separators=(",", ":"))
-    return None
-
-
 def _repair_tool_call_arguments(raw_args: str, tool_name: str = "?") -> str:
     """Attempt to repair malformed tool_call argument JSON.
 
@@ -271,20 +219,6 @@ def _repair_tool_call_arguments(raw_args: str, tool_name: str = "?") -> str:
         return reserialised
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
-
-    # Repair pass 1: collapse concatenated-duplicate JSON.  Cumulative-resend
-    # streaming providers (DeepSeek / Baidu Qianfan, #35592) yield the full
-    # arguments object repeated once per stream chunk; our += accumulator
-    # turns that into '{...}{...}{...}'.  Only reached when pass 0 above
-    # already failed, so spec-compliant single objects are never touched.
-    collapsed = _collapse_repeated_json_arguments(raw_stripped)
-    if collapsed is not None:
-        logger.warning(
-            "Collapsed cumulative-resend duplicate tool_call arguments for "
-            "%s (%d chars -> %d)",
-            tool_name, len(raw_stripped), len(collapsed),
-        )
-        return collapsed
 
     # Attempt common JSON repairs
     fixed = raw_stripped
@@ -343,6 +277,38 @@ def _repair_tool_call_arguments(raw_args: str, tool_name: str = "?") -> str:
         tool_name, raw_stripped[:80],
     )
     return "{}"
+
+
+def close_interrupted_tool_sequence(messages: list, final_response: Any = None) -> bool:
+    """Append a synthetic assistant turn when an interrupted tail is a tool result.
+
+    A turn cut short by ``/stop`` can leave the transcript ending on a raw
+    ``tool`` message (a tool finished, or its execution was cancelled, but the
+    model never streamed a closing assistant turn). Persisting that tail means
+    the next user message lands as ``… tool → user`` — a role-alternation
+    violation that strict providers (Gemini, Claude) react to by hallucinating
+    a continuation of the user's message and ignoring prior context, which
+    reads to the user as "lost context" (#48879).
+
+    ``finalize_turn`` closes this on the happy interrupt path, but the
+    retry/backoff/error interrupt aborts in ``conversation_loop`` ``return``
+    early and never reach it — this shared helper closes the sequence on all of
+    them. ``final_response`` is usually empty on an interrupt, so an explicit
+    placeholder is used rather than an empty-content assistant turn.
+
+    Mutates ``messages`` in place. Returns True if a closing turn was appended.
+    """
+    if not messages:
+        return False
+    last = messages[-1]
+    if not isinstance(last, dict) or last.get("role") != "tool":
+        return False
+    text = final_response if isinstance(final_response, str) else ""
+    messages.append({
+        "role": "assistant",
+        "content": text.strip() or "Operation interrupted.",
+    })
+    return True
 
 
 def _strip_non_ascii(text: str) -> str:
@@ -497,12 +463,12 @@ def _sanitize_structure_non_ascii(payload: Any) -> bool:
 
 __all__ = [
     "_SURROGATE_RE",
+    "close_interrupted_tool_sequence",
     "_sanitize_surrogates",
     "_sanitize_structure_surrogates",
     "_sanitize_messages_surrogates",
     "_escape_invalid_chars_in_json_strings",
     "_repair_tool_call_arguments",
-    "_collapse_repeated_json_arguments",
     "_strip_non_ascii",
     "_sanitize_messages_non_ascii",
     "_sanitize_tools_non_ascii",
