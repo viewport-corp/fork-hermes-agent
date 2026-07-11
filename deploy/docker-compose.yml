@@ -2,13 +2,14 @@
 # Build context = upstream fork at /srv/viewport/forks/hermes-agent
 # Daemon = docker-viewport (DOCKER_HOST=unix:///var/run/docker-viewport.sock)
 # Network = bridge on dvp0 (NOT host mode — overrides upstream)
-# Auth = Codex OAuth via /srv/viewport/runtime/hermes/.codex/auth.json (chown 10000:10000)
+# Auth = Codex OAuth via /opt/data/.codex/auth.json (chown 10000:10000)
+# State = MIGRATED COPY at /srv/viewport/runtime/hermes-viewport-new (original /srv/viewport/runtime/hermes frozen as backup, #462)
 services:
   gateway:
     build:
       context: /srv/viewport/forks/hermes-agent
       dockerfile: Dockerfile
-    image: viewport-corp/hermes-agent:v0.12.0
+    image: viewport-corp/hermes-agent:v2026.7.7.2
     container_name: hermes
     restart: unless-stopped
     networks: [viewport]
@@ -17,7 +18,7 @@ services:
       - HERMES_UID=10000
       - HERMES_GID=10000
     volumes:
-      - /srv/viewport/runtime/hermes:/opt/data
+      - /srv/viewport/runtime/hermes-viewport-new:/opt/data
     command: ["gateway", "run"]
     healthcheck:
       test:
