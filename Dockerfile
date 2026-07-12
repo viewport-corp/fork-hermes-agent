@@ -134,6 +134,11 @@ COPY apps/shared/ apps/shared/
 # runtime `npm install` that then failed with EACCES.  Keeping the env
 # guards against a future regression if the source npm version changes.
 ENV npm_config_install_links=false
+# Network-resilience under chronic host load (viewport-ops#238, re-applied post-v0.18 sync):
+ENV npm_config_fetch_retries=5 \
+    npm_config_fetch_retry_mintimeout=20000 \
+    npm_config_fetch_retry_maxtimeout=120000 \
+    npm_config_fetch_timeout=600000
 
 RUN npm install --prefer-offline --no-audit && \
     npx playwright install --with-deps chromium --only-shell && \
