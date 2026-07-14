@@ -71,8 +71,11 @@ _AGGREGATOR_PROVIDERS: frozenset[str] = frozenset({
 })
 
 # Providers that want bare names with dots replaced by hyphens.
+# ``anthropic-cli`` shares Anthropic's native naming: ``claude -p --model``
+# accepts ``claude-sonnet-4-6`` (hyphenated), so normalize the same way.
 _DOT_TO_HYPHEN_PROVIDERS: frozenset[str] = frozenset({
     "anthropic",
+    "anthropic-cli",
 })
 
 # Providers that want bare names with dots preserved.

@@ -420,7 +420,7 @@ def init_agent(
     agent.provider = provider_name or ""
     agent.acp_command = acp_command or command
     agent.acp_args = list(acp_args or args or [])
-    if api_mode in {"chat_completions", "codex_responses", "anthropic_messages", "bedrock_converse", "codex_app_server"}:
+    if api_mode in {"chat_completions", "codex_responses", "anthropic_messages", "bedrock_converse", "codex_app_server", "anthropic_cli"}:
         agent.api_mode = api_mode
     elif agent.provider == "openai-codex":
         agent.api_mode = "codex_responses"
@@ -888,6 +888,24 @@ def init_agent(
         if not agent.quiet_mode:
             _gr_label = " + Guardrails" if agent._bedrock_guardrail_config else ""
             print(f"🤖 AI Agent initialized with model: {agent.model} (AWS Bedrock, {agent._bedrock_region}{_gr_label})")
+    elif agent.api_mode == "anthropic_cli":
+        # Anthropic Claude CLI — drives the local ``claude -p`` binary as a
+        # subprocess (provider "anthropic-cli"). Like bedrock_converse this
+        # needs NO OpenAI-style HTTP client: the transport
+        # (agent/transports/anthropic_cli_session.py) resolves its own binary
+        # via HERMES_CLAUDE_CLI_BIN / model.anthropic_cli_bin / which("claude")
+        # and authenticates off CLAUDE_CODE_OAUTH_TOKEN in the child env. The
+        # turn is dispatched from conversation_loop via _run_anthropic_cli_turn.
+        #
+        # IMPORTANT: do NOT fall through to the catch-all ``else`` below — that
+        # would call resolve_provider_client(), whose external-process path is
+        # hardcoded for Copilot and would raise AuthError("Could not find the
+        # Copilot CLI command copilot.") for this provider (see fork issue
+        # about the anthropic-cli copilot-credential bug).
+        agent.client = None
+        agent._client_kwargs = {}
+        if not agent.quiet_mode:
+            print(f"🤖 AI Agent initialized with model: {agent.model} (Anthropic Claude CLI, claude -p)")
     else:
         if api_key and base_url:
             # Explicit credentials from CLI/gateway — construct directly.

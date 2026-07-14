@@ -102,6 +102,16 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
         transport="anthropic_messages",
         extra_env_vars=("ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"),
     ),
+    "anthropic-cli": HermesOverlay(
+        # Drives the real ``claude -p`` CLI as a subprocess instead of the
+        # Anthropic Messages HTTP API. Authenticates off the long-lived
+        # CLAUDE_CODE_OAUTH_TOKEN (Max-subscription setup token), injected
+        # into the child env — no API key, no metered billing. See
+        # agent/transports/anthropic_cli_session.py + agent/anthropic_cli_runtime.py.
+        transport="anthropic_cli",
+        auth_type="external_process",
+        extra_env_vars=("CLAUDE_CODE_OAUTH_TOKEN",),
+    ),
     "zai": HermesOverlay(
         transport="openai_chat",
         extra_env_vars=("GLM_API_KEY", "ZAI_API_KEY", "Z_AI_API_KEY"),
@@ -383,6 +393,7 @@ TRANSPORT_TO_API_MODE: Dict[str, str] = {
     "anthropic_messages": "anthropic_messages",
     "codex_responses": "codex_responses",
     "bedrock_converse": "bedrock_converse",
+    "anthropic_cli": "anthropic_cli",
 }
 
 

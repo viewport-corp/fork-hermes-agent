@@ -232,6 +232,14 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         inference_base_url=DEFAULT_COPILOT_ACP_BASE_URL,
         base_url_env_var="COPILOT_ACP_BASE_URL",
     ),
+    "anthropic-cli": ProviderConfig(
+        id="anthropic-cli",
+        name="Anthropic Claude CLI (claude -p)",
+        # Subprocess provider: drives the local ``claude -p`` binary,
+        # authenticating off CLAUDE_CODE_OAUTH_TOKEN in the child env.
+        # No HTTP base_url is used (the binary handles its own transport).
+        auth_type="external_process",
+    ),
     "gemini": ProviderConfig(
         id="gemini",
         name="Google AI Studio",
@@ -6430,6 +6438,25 @@ def resolve_external_process_provider_credentials(provider_id: str) -> Dict[str,
             provider=provider_id,
             code="invalid_provider",
         )
+
+    # anthropic-cli drives the real ``claude -p`` binary as a subprocess and
+    # resolves its OWN binary inside the transport layer
+    # (agent/transports/anthropic_cli_session.py) via
+    # HERMES_CLAUDE_CLI_BIN / model.anthropic_cli_bin / which("claude"),
+    # authenticating off CLAUDE_CODE_OAUTH_TOKEN. It must NOT be forced through
+    # the Copilot CLI resolution below (which would raise
+    # "Could not find the Copilot CLI command copilot."). Return minimal
+    # process creds and let the transport own binary/token resolution.
+    if provider_id == "anthropic-cli":
+        cli_bin = os.getenv("HERMES_CLAUDE_CLI_BIN", "").strip() or "claude"
+        return {
+            "provider": provider_id,
+            "api_key": "external-process",
+            "base_url": "",
+            "command": cli_bin,
+            "args": [],
+            "source": "process",
+        }
 
     base_url = os.getenv(pconfig.base_url_env_var, "").strip() if pconfig.base_url_env_var else ""
     if not base_url:

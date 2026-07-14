@@ -340,6 +340,9 @@ _VALID_API_MODES = {
     # `model.openai_runtime == "codex_app_server"` AND provider in
     # {"openai", "openai-codex"}. Default is unchanged.
     "codex_app_server",
+    # Drives the real ``claude -p`` CLI as a subprocess (provider
+    # "anthropic-cli"). See agent/anthropic_cli_runtime.py.
+    "anthropic_cli",
 }
 
 
@@ -435,6 +438,11 @@ def _resolve_runtime_from_pool_entry(
             if not _anthropic_base_url_override_ok(cfg_base_url):
                 cfg_base_url = ""
         base_url = cfg_base_url or base_url or "https://api.anthropic.com"
+    elif provider == "anthropic-cli":
+        # Subprocess CLI runtime: drive ``claude -p`` directly. No HTTP
+        # base_url is used (the binary handles its own transport), so leave
+        # it untouched.
+        api_mode = "anthropic_cli"
     elif provider == "openrouter":
         base_url = base_url or OPENROUTER_BASE_URL
     elif provider == "xai":
@@ -1655,6 +1663,20 @@ def resolve_runtime_provider(
         explicit_base_url=explicit_base_url,
     )
     model_cfg = _get_model_config()
+
+    # Subprocess CLI provider: drive the local ``claude -p`` binary. It is an
+    # external-process provider (no pool, no HTTP base_url, no api_key) that
+    # authenticates off CLAUDE_CODE_OAUTH_TOKEN in the child env, so resolve it
+    # here before the pool / api-key / openrouter fall-through paths.
+    if provider == "anthropic-cli":
+        return {
+            "provider": "anthropic-cli",
+            "api_mode": "anthropic_cli",
+            "base_url": "",
+            "api_key": "external-process",
+            "source": "process",
+            "requested_provider": requested_provider,
+        }
     explicit_runtime = _resolve_explicit_runtime(
         provider=provider,
         requested_provider=requested_provider,
