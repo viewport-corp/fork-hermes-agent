@@ -9,7 +9,7 @@ services:
     build:
       context: /srv/viewport/forks/hermes-agent
       dockerfile: Dockerfile
-    image: viewport-corp/hermes-agent:v2026.7.7.2
+    image: viewport-corp/hermes-agent:v2026.8.19
     container_name: hermes
     restart: unless-stopped
     networks: [viewport]
