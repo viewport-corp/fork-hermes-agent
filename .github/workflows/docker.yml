@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 # Concurrency: push/release runs are NEVER cancelled so every merge gets
 # its own image.  PR runs reuse a PR-scoped group with
@@ -28,6 +29,7 @@ concurrency:
 
 env:
   IMAGE_NAME: nousresearch/hermes-agent
+  VIEWPORT_GHCR_IMAGE: ghcr.io/viewport-corp/fork-hermes-agent
 
 jobs:
   # Classify the PR's changed files. ci.yml used to gate the docker call on
@@ -233,6 +235,74 @@ jobs:
           NOUS_API_KEY: ""
         run: |
           HERMES_TEST_WORKERS=$(nproc) scripts/run_tests.sh tests/docker/ --file-timeout 600
+
+
+  publish-viewport-ghcr:
+    name: Publish fork image to GHCR
+    if: github.repository == 'viewport-corp/fork-hermes-agent' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [detect]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Docker Buildx
+        id: buildx
+        continue-on-error: true
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Set up Docker Buildx (retry)
+        if: steps.buildx.outcome == 'failure'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push fork image
+        id: push
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          labels: |
+            org.opencontainers.image.source=https://github.com/viewport-corp/fork-hermes-agent
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: |
+            HERMES_GIT_SHA=${{ github.sha }}
+          tags: |
+            ${{ env.VIEWPORT_GHCR_IMAGE }}:main
+            ${{ env.VIEWPORT_GHCR_IMAGE }}:${{ github.sha }}
+          push: true
+          cache-from: type=gha,scope=viewport-ghcr-amd64
+          cache-to: type=gha,mode=max,scope=viewport-ghcr-amd64
+
+      - name: Inspect immutable image
+        env:
+          IMAGE_REF: ${{ env.VIEWPORT_GHCR_IMAGE }}@${{ steps.push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "$IMAGE_REF"
+          {
+            echo "## Viewport Hermes GHCR image"
+            echo "image=$IMAGE_REF"
+            echo "digest=${{ steps.push.outputs.digest }}"
+            echo "source_sha=${{ github.sha }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Critical vulnerability admission scan
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
+        with:
+          image-ref: ${{ env.VIEWPORT_GHCR_IMAGE }}@${{ steps.push.outputs.digest }}
+          format: table
+          severity: CRITICAL
+          exit-code: 1
+          ignore-unfixed: true
 
   # ---------------------------------------------------------------------------
   # Rebuild and push each architecture only after the unprivileged build/test
