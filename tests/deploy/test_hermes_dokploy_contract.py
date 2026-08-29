@@ -89,14 +89,20 @@ PY
     }
 
 
-def test_projector_stage_aliases_api_key(tmp_path: Path) -> None:
+def test_projector_stage_allows_empty_projection(tmp_path: Path) -> None:
     source = tmp_path / "platformx.env"
     dest = tmp_path / "runtime.env"
-    source.write_text("API_SERVER_KEY=prod\nHERMES_STAGE_API_SERVER_KEY=stage\n", encoding="utf-8")
-    _run_node("deploy/project-platformx-env.mjs", str(source), str(dest), "stage")
-    rendered = dest.read_text(encoding="utf-8")
-    assert "export API_SERVER_KEY='stage'" in rendered
-    assert "HERMES_STAGE_API_SERVER_KEY" not in rendered
+    source.write_text(
+        "API_SERVER_KEY=ignored\n"
+        "HERMES_STAGE_API_SERVER_KEY=ignored\n"
+        "TELEGRAM_BOT_TOKEN=must-not-stage\n",
+        encoding="utf-8",
+    )
+    result = _run_node("deploy/project-platformx-env.mjs", str(source), str(dest), "stage")
+    payload = json.loads(result.stdout)
+    assert payload["profile"] == "stage"
+    assert payload["projectedKeys"] == []
+    assert dest.read_text(encoding="utf-8") == "\n"
 
 
 def test_projector_gates_production_without_dashboard_auth(tmp_path: Path) -> None:
@@ -123,3 +129,46 @@ def test_prepull_contract_is_digest_only_and_docker_viewport_socket() -> None:
     assert "HERMES_PREPULL_IMAGE=\"$(python3" in script
     assert "@sha256:[a-f0-9]{64}" in script
     assert "--password-stdin" in script
+
+
+def test_fork_publish_gate_skips_digest_pin_only_changes() -> None:
+    import importlib.util
+
+    script = ROOT / "scripts/ci/viewport_ghcr_publish_gate.py"
+    spec = importlib.util.spec_from_file_location("viewport_ghcr_publish_gate", script)
+    assert spec and spec.loader
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    assert gate.should_publish({
+        "deploy/docker-compose.yml",
+        "deploy/dokploy.desired-state.json",
+    }, "1" * 40) is False
+    assert gate.should_publish({
+        "deploy/docker-compose.yml",
+        "hermes_cli/gateway.py",
+    }, "1" * 40) is True
+    assert gate.should_publish({
+        "deploy/docker-compose.yml",
+    }, "0" * 40) is True
+
+
+def test_stage_compose_is_isolated_from_production() -> None:
+    stage = (ROOT / "deploy/dokploy.stage.yml").read_text(encoding="utf-8")
+    desired = json.loads(
+        (ROOT / "deploy/dokploy.stage.desired-state.json").read_text(encoding="utf-8")
+    )
+    assert desired["stageOnly"] is True
+    assert desired["secrets"]["projectorProfile"] == "stage"
+    assert desired["secrets"]["allowedProjectedKeys"] == []
+    assert desired["secrets"]["emptyProjectionAllowed"] is True
+    for key in desired["requiredVariables"]:
+        assert f"${{{key}:" in stage or key == "HERMES_STAGE_IMAGE"
+    assert "project-platformx-env.mjs /run/platformx.env" in stage
+    assert "/run/hermes-stage-secrets/runtime.env stage" in stage
+    assert "ports:" not in stage
+    assert "172.31.15.2" not in stage
+    assert "/srv/viewport/runtime/hermes-viewport-new" not in stage
+    assert "HERMES_DASHBOARD_HOST=127.0.0.1" in stage
+    assert "TELEGRAM_" not in stage
+    assert "OPENAI_API_KEY" not in stage
+    assert "GITHUB_TOKEN" not in stage

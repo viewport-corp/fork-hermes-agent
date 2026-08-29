@@ -24,10 +24,8 @@ services:
     image: *hermes-image
     pull_policy: if_not_present
     user: "0:0"
-    entrypoint: ["/opt/hermes/docker/entrypoint-dispatch.sh"]
+    entrypoint: ["/bin/sh", "-ec"]
     command:
-      - sh
-      - -ec
       - node /opt/hermes/deploy/project-platformx-env.mjs /run/platformx.env /run/hermes-secrets/runtime.env production && exec sleep infinity
     network_mode: none
     restart: unless-stopped

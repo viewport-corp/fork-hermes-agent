@@ -1,0 +1,106 @@
+# Git-owned isolated Dokploy stage compose for Hermes.
+#
+# This is intentionally separate from deploy/docker-compose.yml because production
+# state, public edge IPs, and production secret projection must not be reused for stage.
+name: ${HERMES_STAGE_PROJECT_NAME:?set isolated Dokploy stage project name}
+
+x-hermes-stage-image: &hermes-stage-image ${HERMES_STAGE_IMAGE:?set immutable ghcr.io/viewport-corp/fork-hermes-agent@sha256:<digest> for stage}
+
+services:
+  secret-init:
+    image: *hermes-stage-image
+    pull_policy: if_not_present
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - node /opt/hermes/deploy/project-platformx-env.mjs /run/platformx.env /run/hermes-stage-secrets/runtime.env stage && exec sleep infinity
+    network_mode: none
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test -r /run/hermes-stage-secrets/runtime.env && test "$$(stat -c %u:%g:%a /run/hermes-stage-secrets/runtime.env)" = 10000:10000:400
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    volumes:
+      - type: bind
+        source: /srv/viewport/secrets/platformx.env
+        target: /run/platformx.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: stage-projected-secrets
+        target: /run/hermes-stage-secrets
+
+  hermes-stage:
+    image: *hermes-stage-image
+    pull_policy: if_not_present
+    container_name: ${HERMES_STAGE_CONTAINER_NAME:?set isolated stage container name}
+    restart: unless-stopped
+    entrypoint: ["/opt/hermes/deploy/hermes-entrypoint.sh"]
+    command: ["gateway", "run"]
+    environment:
+      - HERMES_UID=10000
+      - HERMES_GID=10000
+      - HERMES_DASHBOARD=true
+      - HERMES_DASHBOARD_HOST=127.0.0.1
+      - HERMES_DASHBOARD_PORT=9119
+      - HERMES_GATEWAY_BOOTSTRAP_STATE=running
+      - HERMES_PROJECTED_ENV_FILE=/run/hermes-stage-secrets/runtime.env
+    depends_on:
+      secret-init:
+        condition: service_healthy
+    networks:
+      stage:
+        ipv4_address: ${HERMES_STAGE_IPV4_ADDRESS:?set isolated stage container IP inside HERMES_STAGE_SUBNET}
+    volumes:
+      - type: volume
+        source: stage-projected-secrets
+        target: /run/hermes-stage-secrets
+        read_only: true
+      - type: bind
+        source: ${HERMES_STAGE_STATE_DIR:?set isolated stage state dir, not production state}
+        target: /opt/data
+        bind:
+          create_host_path: false
+    stop_grace_period: 60s
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import json,sys,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:9119/api/health', timeout=5); data=json.load(r); sys.exit(0 if getattr(r, 'status', 200) == 200 and data.get('ok') is True else 1)"
+      interval: 30s
+      timeout: 8s
+      retries: 5
+      start_period: 90s
+    labels:
+      - "viewport.tier=stage"
+      - "viewport.role=operator-harness-stage"
+      - "viewport.source=github"
+      - "viewport.hermes.stage=true"
+      - "traefik.enable=false"
+
+volumes:
+  stage-projected-secrets:
+    name: ${HERMES_STAGE_SECRET_VOLUME_NAME:?set isolated stage secret volume name}
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: uid=0,gid=0,mode=0711,size=65536
+
+networks:
+  stage:
+    name: ${HERMES_STAGE_NETWORK_NAME:?set isolated stage network name}
+    ipam:
+      config:
+        - subnet: ${HERMES_STAGE_SUBNET:?set isolated stage subnet CIDR}

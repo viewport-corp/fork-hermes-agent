@@ -9,7 +9,7 @@ if (profile !== "production" && profile !== "stage") throw new Error(`unsupporte
 const gatewayKeys = ["API_SERVER_KEY", "HERMES_AUTH_JSON_BOOTSTRAP", "HERMES_AUTH_JSON_REBOOTSTRAP", "HERMES_DASHBOARD_BASIC_AUTH_USERNAME", "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD", "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH", "HERMES_DASHBOARD_BASIC_AUTH_SECRET", "HERMES_DASHBOARD_DRAIN_SECRET", "HERMES_DASHBOARD_OAUTH_CLIENT_ID", "HERMES_DASHBOARD_OAUTH_CLIENT_SECRET", "HERMES_DASHBOARD_OIDC_ISSUER", "HERMES_DASHBOARD_OIDC_CLIENT_ID", "HERMES_DASHBOARD_OIDC_CLIENT_SECRET", "HERMES_DASHBOARD_SESSION_TOKEN", "HERMES_INFERENCE_MODEL", "HERMES_INFERENCE_PROVIDER"];
 const modelKeys = ["ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "GEMINI_API_KEY", "GITHUB_TOKEN", "GITHUB_TOKEN_VIEWPORT_CORP", "GOOGLE_API_KEY", "GROQ_API_KEY", "NVIDIA_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "XAI_API_KEY"];
 const telegramKeys = ["TELEGRAM_ALLOWED_USERS", "TELEGRAM_ALLOW_ALL_USERS", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CRON_THREAD_ID", "TELEGRAM_FALLBACK_IPS", "TELEGRAM_GROUP_ALLOWED_CHATS", "TELEGRAM_GROUP_ALLOWED_USERS", "TELEGRAM_HOME_CHANNEL", "TELEGRAM_HOME_CHANNEL_NAME", "TELEGRAM_HOME_CHANNEL_THREAD_ID", "TELEGRAM_PROXY", "TELEGRAM_REQUIRE_MENTION"];
-const stageKeys = ["API_SERVER_KEY", "HERMES_STAGE_API_SERVER_KEY"];
+const stageKeys = [];
 const allowedKeys = profile === "production" ? [...gatewayKeys, ...modelKeys, ...telegramKeys] : stageKeys;
 const parseEnv = (content) => {
   const out = {};
@@ -30,8 +30,6 @@ const parseEnv = (content) => {
 };
 const parsed = parseEnv(readFileSync(sourcePath, "utf8"));
 const selected = Object.fromEntries(allowedKeys.filter((key) => typeof parsed[key] === "string" && parsed[key].length > 0).map((key) => [key, parsed[key]]));
-if (profile === "stage" && selected.HERMES_STAGE_API_SERVER_KEY) { selected.API_SERVER_KEY = selected.HERMES_STAGE_API_SERVER_KEY; delete selected.HERMES_STAGE_API_SERVER_KEY; }
-if (!selected.API_SERVER_KEY) throw new Error("canonical secret source lacks API_SERVER_KEY");
 if (profile === "production" && !selected.TELEGRAM_BOT_TOKEN) throw new Error("canonical secret source lacks TELEGRAM_BOT_TOKEN for production");
 const hasDashboardAuth = Boolean((selected.HERMES_DASHBOARD_BASIC_AUTH_USERNAME && (selected.HERMES_DASHBOARD_BASIC_AUTH_PASSWORD || selected.HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH)) || selected.HERMES_DASHBOARD_OAUTH_CLIENT_ID || (selected.HERMES_DASHBOARD_OIDC_ISSUER && selected.HERMES_DASHBOARD_OIDC_CLIENT_ID));
 if (profile === "production" && !hasDashboardAuth) throw new Error("canonical secret source lacks dashboard auth migration keys: set basic auth username plus password/hash, or OAuth client id, or OIDC issuer plus client id");

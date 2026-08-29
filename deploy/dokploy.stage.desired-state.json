@@ -1,0 +1,44 @@
+{
+  "composeId": "<new-dokploy-stage-compose-id>",
+  "sourceType": "git",
+  "customGitUrl": "https://github.com/viewport-corp/fork-hermes-agent.git",
+  "customGitBranch": "main",
+  "composePath": "deploy/dokploy.stage.yml",
+  "composeType": "docker-compose",
+  "stageOnly": true,
+  "image": "ghcr.io/viewport-corp/fork-hermes-agent@sha256:<stage-reviewed-digest>",
+  "requiredVariables": [
+    "HERMES_STAGE_PROJECT_NAME",
+    "HERMES_STAGE_CONTAINER_NAME",
+    "HERMES_STAGE_STATE_DIR",
+    "HERMES_STAGE_SECRET_VOLUME_NAME",
+    "HERMES_STAGE_NETWORK_NAME",
+    "HERMES_STAGE_SUBNET",
+    "HERMES_STAGE_IPV4_ADDRESS",
+    "HERMES_STAGE_IMAGE"
+  ],
+  "secrets": {
+    "source": "/srv/viewport/secrets/platformx.env",
+    "projectedRuntimeFile": "/run/hermes-stage-secrets/runtime.env",
+    "projectorProfile": "stage",
+    "allowedProjectedKeys": [],
+    "forbiddenProductionSecretClasses": [
+      "TELEGRAM_*",
+      "HERMES_DASHBOARD_*",
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "OPENROUTER_API_KEY",
+      "GITHUB_TOKEN*"
+    ],
+    "emptyProjectionAllowed": true,
+    "stageSecretContract": "Stage projection intentionally passes no production Telegram, model, GitHub, or dashboard secrets; internal health validation does not require them."
+  },
+  "runtimeIsolation": {
+    "noProductionStateMount": true,
+    "forbiddenProductionStateDir": "/srv/viewport/runtime/hermes-viewport-new",
+    "noPublishedPorts": true,
+    "noPublicEdgeIp": true,
+    "forbiddenPublicEdgeIp": "172.31.15.2",
+    "healthcheck": "http://127.0.0.1:9119/api/health"
+  }
+}
