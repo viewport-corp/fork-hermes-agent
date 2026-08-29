@@ -27,8 +27,11 @@ concurrency:
 jobs:
   bootstrap-installer:
     name: cargo test (bootstrap installer)
+    # Viewport's public fork uses the standard GitHub-hosted runner because
+    # its GitHub Free organization cannot assign the upstream larger runner.
+    # This lane also builds the crate from the start when Cargo.toml changes.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: apps/bootstrap-installer/src-tauri
