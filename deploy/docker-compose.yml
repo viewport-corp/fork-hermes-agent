@@ -1,25 +1,39 @@
-# /srv/viewport/deploy/hermes/docker-compose.yml
-# Build context = upstream fork at /srv/viewport/forks/hermes-agent
-# Daemon = docker-viewport (DOCKER_HOST=unix:///var/run/docker-viewport.sock)
-# Network = bridge on dvp0 (NOT host mode — overrides upstream)
-# Auth = Codex OAuth via /opt/data/.codex/auth.json (chown 10000:10000)
-# State = MIGRATED COPY at /srv/viewport/runtime/hermes-viewport-new (original /srv/viewport/runtime/hermes frozen as backup, #462)
+# Dokploy compose contract for Viewport Hermes.
+#
+# Dokploy source:
+#   source type: git/customGitUrl (no GitHub provider required)
+#   customGitUrl: https://github.com/viewport-corp/fork-hermes-agent
+#   customGitBranch: main
+#   expected commit: 5fc308a70719a83cccdbba4c0e39c23f5a8239d5
+#   compose path: deploy/docker-compose.yml
+#
+# Runtime boundaries:
+#   - Deploy only on NEW Dokploy.
+#   - Do not use the old host clone at /srv/viewport/forks/hermes-agent.
+#   - Load project secrets only from /srv/viewport/secrets/platformx.env.
+#   - Preserve the existing state at /srv/viewport/runtime/hermes-viewport-new.
 services:
-  gateway:
+  hermes:
     build:
-      context: /srv/viewport/forks/hermes-agent
+      context: ..
       dockerfile: Dockerfile
-    image: viewport-corp/hermes-agent:v2026.8.19
-    container_name: hermes
+      args:
+        HERMES_GIT_SHA: 5fc308a70719a83cccdbba4c0e39c23f5a8239d5
+    image: viewport-corp/hermes-agent:v2026.8.27-5fc308a
+    container_name: hermes-viewport
     restart: unless-stopped
-    networks: [viewport]
-    env_file: /srv/viewport/secrets/hermes.env
+    env_file:
+      - /srv/viewport/secrets/platformx.env
     environment:
       - HERMES_UID=10000
       - HERMES_GID=10000
+      - HERMES_GIT_SHA=5fc308a70719a83cccdbba4c0e39c23f5a8239d5
     volumes:
-      - /srv/viewport/runtime/hermes-viewport-new:/opt/data
+      - type: bind
+        source: /srv/viewport/runtime/hermes-viewport-new
+        target: /opt/data
     command: ["gateway", "run"]
+    stop_grace_period: 60s
     healthcheck:
       test:
         [
@@ -30,13 +44,25 @@ services:
       timeout: 10s
       retries: 3
       start_period: 90s
+    deploy:
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+      restart_policy:
+        condition: any
+        delay: 10s
+        max_attempts: 3
+        window: 120s
     labels:
       - "viewport.tier=tier-0"
       - "viewport.role=operator-harness"
+      - "viewport.source=github"
+      - "viewport.hermes.release=v2026.8.27"
+      - "viewport.hermes.commit=5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
       - "traefik.enable=false"
-
-networks:
-  viewport:
-    driver: bridge
-    driver_opts:
-      com.docker.network.bridge.name: viewport0
