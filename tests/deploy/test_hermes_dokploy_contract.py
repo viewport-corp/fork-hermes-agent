@@ -54,6 +54,7 @@ def test_projector_allows_only_runtime_keys_and_quotes(tmp_path: Path) -> None:
     assert "GITHUB_TOKEN" in payload["projectedKeys"]
     rendered = dest.read_text(encoding="utf-8")
     assert "UNRELATED_SECRET" not in rendered
+    assert "export API_SERVER_KEY=" not in rendered
     assert "export GITHUB_TOKEN=" in rendered
     assert "export HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=" in rendered
     assert stat.S_IMODE(dest.stat().st_mode) == 0o400
@@ -64,7 +65,6 @@ python3 - <<PY
 import json
 import os
 keys = [
-    "API_SERVER_KEY",
     "GITHUB_TOKEN",
     "OPENAI_API_KEY",
     "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD",
@@ -82,7 +82,6 @@ PY
         ).stdout
     )
     assert loaded == {
-        "API_SERVER_KEY": "api-key",
         "GITHUB_TOKEN": "github-token",
         "OPENAI_API_KEY": "token with spaces",
         "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "pass with quote ' ok",
