@@ -50,6 +50,11 @@ assert.ok(
 );
 assert.match(compose, /source: \/srv\/viewport\/secrets\/platformx\.env/u);
 assert.match(compose, /target: \/run\/hermes-secrets/u);
+assert.match(
+  compose,
+  /test -f \/run\/hermes-secrets\/runtime\.env && test "\$\$\(stat -c %u:%g:%a \/run\/hermes-secrets\/runtime\.env\)" = 10000:10000:400/u,
+);
+assert.doesNotMatch(compose, /test -r \/run\/hermes-secrets\/runtime\.env/u);
 assert.match(compose, /pull_policy: if_not_present/u);
 assert.match(compose, /ipv4_address: \$\{HERMES_IPV4_ADDRESS:-172\.31\.15\.2\}/u);
 assert.match(compose, /name: \$\{HERMES_NETWORK_NAME:-fork-hermes-agent_default\}/u);
@@ -112,6 +117,11 @@ assert.ok(
 assert.match(stageCompose, /subnet: \$\{HERMES_STAGE_SUBNET:/u);
 assert.match(stageCompose, /ipv4_address: \$\{HERMES_STAGE_IPV4_ADDRESS:/u);
 assert.match(stageCompose, /project-platformx-env\.mjs .* stage/u);
+assert.match(
+  stageCompose,
+  /test -f \/run\/hermes-stage-secrets\/runtime\.env && test "\$\$\(stat -c %u:%g:%a \/run\/hermes-stage-secrets\/runtime\.env\)" = 10000:10000:400/u,
+);
+assert.doesNotMatch(stageCompose, /test -r \/run\/hermes-stage-secrets\/runtime\.env/u);
 assert.match(stageCompose, /HERMES_DASHBOARD_HOST=127\.0\.0\.1/u);
 assert.match(stageCompose, /http:\/\/127\.0\.0\.1:9119\/api\/health/u);
 assert.doesNotMatch(stageCompose, /ports:/u);

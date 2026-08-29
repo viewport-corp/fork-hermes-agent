@@ -120,6 +120,17 @@ def test_projector_gates_production_without_dashboard_auth(tmp_path: Path) -> No
     assert "dashboard auth migration keys" in result.stderr
 
 
+def test_secret_init_healthchecks_use_metadata_not_read_permission() -> None:
+    prod = (ROOT / "deploy/docker-compose.yml").read_text(encoding="utf-8")
+    stage = (ROOT / "deploy/dokploy.stage.yml").read_text(encoding="utf-8")
+    assert "test -f /run/hermes-secrets/runtime.env" in prod
+    assert "test -r /run/hermes-secrets/runtime.env" not in prod
+    assert "stat -c %u:%g:%a /run/hermes-secrets/runtime.env" in prod
+    assert "test -f /run/hermes-stage-secrets/runtime.env" in stage
+    assert "test -r /run/hermes-stage-secrets/runtime.env" not in stage
+    assert "stat -c %u:%g:%a /run/hermes-stage-secrets/runtime.env" in stage
+
+
 def test_entrypoint_refuses_legacy_state_env_files(tmp_path: Path) -> None:
     projected = tmp_path / "runtime.env"
     projected.write_text("export HERMES_ENTRYPOINT_TEST_VALUE=safe-test-value\n", encoding="utf-8")
@@ -192,6 +203,9 @@ def test_stage_compose_is_isolated_from_production() -> None:
         assert f"${{{key}:" in stage or key == "HERMES_STAGE_IMAGE"
     assert "project-platformx-env.mjs /run/platformx.env" in stage
     assert "/run/hermes-stage-secrets/runtime.env stage" in stage
+    assert "test -f /run/hermes-stage-secrets/runtime.env" in stage
+    assert "test -r /run/hermes-stage-secrets/runtime.env" not in stage
+    assert "stat -c %u:%g:%a /run/hermes-stage-secrets/runtime.env" in stage
     assert "ports:" not in stage
     assert "172.31.15.2" not in stage
     assert "/srv/viewport/runtime/hermes-viewport-new" not in stage

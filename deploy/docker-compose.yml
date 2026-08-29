@@ -37,7 +37,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - test -r /run/hermes-secrets/runtime.env && test "$$(stat -c %u:%g:%a /run/hermes-secrets/runtime.env)" = 10000:10000:400
+        - test -f /run/hermes-secrets/runtime.env && test "$$(stat -c %u:%g:%a /run/hermes-secrets/runtime.env)" = 10000:10000:400
       interval: 5s
       timeout: 3s
       retries: 5
