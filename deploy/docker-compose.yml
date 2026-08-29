@@ -4,7 +4,7 @@
 #   source type: git/customGitUrl (no GitHub provider required)
 #   customGitUrl: https://github.com/viewport-corp/fork-hermes-agent.git
 #   customGitBranch: main
-#   expected commit: 5fc308a70719a83cccdbba4c0e39c23f5a8239d5
+#   upstream release commit: 5fc308a70719a83cccdbba4c0e39c23f5a8239d5
 #   compose path: deploy/docker-compose.yml
 #   composeId: kl7tmNAE6_kbE_c7q6l2I
 #
@@ -65,7 +65,6 @@ services:
     environment:
       - HERMES_UID=10000
       - HERMES_GID=10000
-      - HERMES_GIT_SHA=5fc308a70719a83cccdbba4c0e39c23f5a8239d5
       - HERMES_DASHBOARD=true
       - HERMES_DASHBOARD_HOST=0.0.0.0
       - HERMES_DASHBOARD_PORT=9119
@@ -110,7 +109,8 @@ services:
       - "viewport.role=operator-harness"
       - "viewport.source=github"
       - "viewport.hermes.release=v2026.8.27"
-      - "viewport.hermes.commit=5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
+      - "viewport.hermes.upstream_release_commit=5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
+      - "viewport.hermes.image_source_revision=${HERMES_IMAGE_SOURCE_REVISION:-set-by-ghcr-publish-digest}"
       - "traefik.enable=false"
 
 volumes:

@@ -284,6 +284,10 @@ RUN cd web && npm run build && \
 # gives the non-root hermes user read + traverse but no write; root retains
 # write so the build steps below don't need chmod u+w dances.
 COPY --link --chmod=a+rX,go-w . .
+# Dokploy deployment helpers are runtime entrypoints, not metadata. Copy them
+# explicitly so .dockerignore or future build-context changes cannot remove
+# the files that deploy/docker-compose.yml executes.
+COPY --chmod=0755 deploy/hermes-entrypoint.sh deploy/project-platformx-env.mjs /opt/hermes/deploy/
 
 # ---------- Permissions ----------
 # Link hermes-agent itself (editable). Deps are already installed in the

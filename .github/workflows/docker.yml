@@ -17,7 +17,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 # Concurrency: push/release runs are NEVER cancelled so every merge gets
 # its own image.  PR runs reuse a PR-scoped group with
@@ -243,6 +242,11 @@ jobs:
     needs: [detect]
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
     steps:
       - name: Checkout trusted source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -256,15 +260,8 @@ jobs:
         if: steps.buildx.outcome == 'failure'
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
-      - name: Log in to GHCR
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Build and push fork image
-        id: push
+      - name: Build local admission candidate
+        id: candidate
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
@@ -276,33 +273,94 @@ jobs:
           build-args: |
             HERMES_GIT_SHA=${{ github.sha }}
           tags: |
-            ${{ env.VIEWPORT_GHCR_IMAGE }}:main
-            ${{ env.VIEWPORT_GHCR_IMAGE }}:${{ github.sha }}
-          push: true
+            ${{ env.VIEWPORT_GHCR_IMAGE }}:${{ github.sha }}-candidate
+          load: true
           cache-from: type=gha,scope=viewport-ghcr-amd64
           cache-to: type=gha,mode=max,scope=viewport-ghcr-amd64
 
-      - name: Inspect immutable image
+      - name: Assert candidate runtime contract
         env:
-          IMAGE_REF: ${{ env.VIEWPORT_GHCR_IMAGE }}@${{ steps.push.outputs.digest }}
+          CANDIDATE_IMAGE: ${{ env.VIEWPORT_GHCR_IMAGE }}:${{ github.sha }}-candidate
         run: |
           set -euo pipefail
-          docker buildx imagetools inspect "$IMAGE_REF"
+          docker run --rm --entrypoint /bin/sh "$CANDIDATE_IMAGE" -ec '
+            test -x /opt/hermes/deploy/hermes-entrypoint.sh
+            test -x /opt/hermes/deploy/project-platformx-env.mjs
+            test -x /opt/hermes/docker/entrypoint-dispatch.sh
+            node --version
+            python3 --version
+          '
+
+      - name: Admission vulnerability scan before push
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: ${{ env.VIEWPORT_GHCR_IMAGE }}:${{ github.sha }}-candidate
+          format: table
+          output: trivy-ghcr-admission.txt
+          severity: HIGH,CRITICAL
+          exit-code: 1
+          ignore-unfixed: true
+
+      - name: Print admission scan report
+        if: always() && hashFiles('trivy-ghcr-admission.txt') != ''
+        run: cat trivy-ghcr-admission.txt
+
+      - name: Generate candidate SBOM
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: ${{ env.VIEWPORT_GHCR_IMAGE }}:${{ github.sha }}-candidate
+          format: cyclonedx
+          output: trivy-ghcr-sbom.cdx.json
+          exit-code: 0
+
+      - name: Upload admission evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: viewport-ghcr-admission-${{ github.sha }}
+          path: |
+            trivy-ghcr-admission.txt
+            trivy-ghcr-sbom.cdx.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Log in to GHCR after admission
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Push admitted image
+        id: push-ghcr
+        env:
+          CANDIDATE_IMAGE: ${{ env.VIEWPORT_GHCR_IMAGE }}:${{ github.sha }}-candidate
+          SHA_IMAGE: ${{ env.VIEWPORT_GHCR_IMAGE }}:${{ github.sha }}
+          MAIN_IMAGE: ${{ env.VIEWPORT_GHCR_IMAGE }}:main
+        run: |
+          set -euo pipefail
+          docker tag "$CANDIDATE_IMAGE" "$SHA_IMAGE"
+          docker tag "$CANDIDATE_IMAGE" "$MAIN_IMAGE"
+          docker push "$SHA_IMAGE"
+          docker push "$MAIN_IMAGE"
+          digest="$(docker buildx imagetools inspect "$SHA_IMAGE" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          test -n "$digest"
+          case "$digest" in sha256:*) ;; *) echo "Unexpected digest: $digest" >&2; exit 1 ;; esac
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          docker buildx imagetools inspect "${{ env.VIEWPORT_GHCR_IMAGE }}@$digest"
           {
             echo "## Viewport Hermes GHCR image"
-            echo "image=$IMAGE_REF"
-            echo "digest=${{ steps.push.outputs.digest }}"
+            echo "image=${{ env.VIEWPORT_GHCR_IMAGE }}@$digest"
+            echo "digest=$digest"
             echo "source_sha=${{ github.sha }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Critical vulnerability admission scan
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1  # v0.35.0
+      - name: Attest admitted image
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
-          image-ref: ${{ env.VIEWPORT_GHCR_IMAGE }}@${{ steps.push.outputs.digest }}
-          format: table
-          severity: CRITICAL
-          exit-code: 1
-          ignore-unfixed: true
+          subject-name: ${{ env.VIEWPORT_GHCR_IMAGE }}
+          subject-digest: ${{ steps.push-ghcr.outputs.digest }}
+          push-to-registry: true
 
   # ---------------------------------------------------------------------------
   # Rebuild and push each architecture only after the unprivileged build/test

@@ -7,8 +7,33 @@
   "composeType": "docker-compose",
   "image": "ghcr.io/viewport-corp/fork-hermes-agent@sha256:<replace-after-main-publish>",
   "imageMergeGate": "Replace with the exact digest emitted by Docker Build, Test, and Publish / Publish fork image to GHCR before merging this deployment contract.",
-  "secrets": {"source": "/srv/viewport/secrets/platformx.env", "projectedRuntimeFile": "/run/hermes-secrets/runtime.env", "persistRegistryCredentialsInDokploy": false},
-  "dashboard": {"healthcheck": "http://127.0.0.1:9119/api/health", "publicEdgeTarget": "172.31.15.2:9119", "secretMigrationContract": "Dashboard auth secrets remain in platformx.env and are projected at container boot; no secret values are stored in Git or Dokploy metadata."},
-  "network": {"external": true, "name": "fork-hermes-agent_default", "nameEnv": "HERMES_NETWORK_NAME", "gatewayService": "hermes", "gatewayIpv4Address": "172.31.15.2", "gatewayIpv4AddressEnv": "HERMES_IPV4_ADDRESS"},
-  "rollback": {"method": "Restore the previous Dokploy desired-state record and immutable image digest, then redeploy from GitHub. If the new digest was pre-pulled only, remove it from docker-viewport after rollback validation.", "backupBeforeDeploy": ["Record current Dokploy composeId kl7tmNAE6_kbE_c7q6l2I settings without secret values.", "Record current immutable image digest and current container inspect labels.", "Snapshot /srv/viewport/runtime/hermes-viewport-new using the approved VPS backup path before any runtime deployment."]}
+  "secrets": {
+    "source": "/srv/viewport/secrets/platformx.env",
+    "projectedRuntimeFile": "/run/hermes-secrets/runtime.env",
+    "persistRegistryCredentialsInDokploy": false,
+    "dashboardAuthMigrationPrerequisite": "Before production projection, platformx.env must contain one dashboard auth method: basic username plus password/hash, or OAuth client id, or OIDC issuer plus client id. No secret values are stored in Git or Dokploy metadata."
+  },
+  "dashboard": {
+    "healthcheck": "http://127.0.0.1:9119/api/health",
+    "publicEdgeTarget": "172.31.15.2:9119",
+    "secretMigrationContract": "Dashboard auth secrets are a required migration prerequisite in platformx.env; this PR does not claim current values exist and does not store them in Git or Dokploy metadata."
+  },
+  "network": {
+    "external": true,
+    "name": "fork-hermes-agent_default",
+    "nameEnv": "HERMES_NETWORK_NAME",
+    "gatewayService": "hermes",
+    "gatewayIpv4Address": "172.31.15.2",
+    "gatewayIpv4AddressEnv": "HERMES_IPV4_ADDRESS"
+  },
+  "rollback": {
+    "method": "Restore the previous Dokploy desired-state record and immutable image digest, then redeploy from GitHub. If the new digest was pre-pulled only, remove it from docker-viewport after rollback validation.",
+    "backupBeforeDeploy": [
+      "Record current Dokploy composeId kl7tmNAE6_kbE_c7q6l2I settings without secret values.",
+      "Record current immutable image digest and current container inspect labels.",
+      "Snapshot /srv/viewport/runtime/hermes-viewport-new using the approved VPS backup path before any runtime deployment."
+    ]
+  },
+  "upstreamReleaseCommit": "5fc308a70719a83cccdbba4c0e39c23f5a8239d5",
+  "imageSourceRevision": "from GHCR publish workflow source_sha/digest after merge"
 }
