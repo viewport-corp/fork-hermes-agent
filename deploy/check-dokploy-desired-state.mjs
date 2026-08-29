@@ -12,6 +12,7 @@ const stageDesired = JSON.parse(
   readFileSync(path.join(rootDir, "deploy/dokploy.stage.desired-state.json"), "utf8"),
 );
 const stageCompose = readFileSync(path.join(rootDir, "deploy/dokploy.stage.yml"), "utf8");
+const entrypoint = readFileSync(path.join(rootDir, "deploy/hermes-entrypoint.sh"), "utf8");
 assert.equal(desired.composeId, "kl7tmNAE6_kbE_c7q6l2I");
 assert.equal(desired.sourceType, "git");
 assert.equal(desired.customGitUrl, "https://github.com/viewport-corp/fork-hermes-agent.git");
@@ -24,6 +25,19 @@ assert.match(
   desired.secrets.dashboardAuthMigrationPrerequisite,
   /must contain one dashboard auth method/u,
 );
+assert.deepEqual(desired.stateEnvMigration.legacyFilesBlockDeploy, [".env", ".op.env"]);
+assert.match(
+  desired.stateEnvMigration.requiredAction,
+  /before production deploy.*protected rollback backup/u,
+);
+assert.match(
+  desired.stateEnvMigration.requiredAction,
+  /do not leave an empty file or \/dev\/null replacement/u,
+);
+assert.match(entrypoint, /HERMES_HOME:-\/opt\/data/u);
+assert.match(entrypoint, /\.env.*\.op\.env/su);
+assert.match(entrypoint, /protected rollback backup/u);
+assert.match(entrypoint, /empty file or \/dev\/null/u);
 assert.equal(desired.upstreamReleaseCommit, "5fc308a70719a83cccdbba4c0e39c23f5a8239d5");
 assert.equal(desired.network.external, true);
 assert.equal(desired.network.name, "fork-hermes-agent_default");
@@ -63,6 +77,9 @@ assert.equal(stageDesired.composePath, "deploy/dokploy.stage.yml");
 assert.equal(stageDesired.secrets.projectorProfile, "stage");
 assert.deepEqual(stageDesired.secrets.allowedProjectedKeys, []);
 assert.equal(stageDesired.secrets.emptyProjectionAllowed, true);
+assert.equal(stageDesired.runtimeIsolation.legacyEnvExclusion.required, true);
+assert.deepEqual(stageDesired.runtimeIsolation.legacyEnvExclusion.forbiddenFiles, [".env", ".op.env"]);
+assert.match(stageDesired.runtimeIsolation.legacyEnvExclusion.reason, /entrypoint.*fails closed/u);
 for (const key of [
   "HERMES_STAGE_PROJECT_NAME",
   "HERMES_STAGE_CONTAINER_NAME",

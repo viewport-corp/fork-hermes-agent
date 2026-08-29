@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import subprocess
 from pathlib import Path
@@ -119,6 +120,31 @@ def test_projector_gates_production_without_dashboard_auth(tmp_path: Path) -> No
     assert "dashboard auth migration keys" in result.stderr
 
 
+def test_entrypoint_refuses_legacy_state_env_files(tmp_path: Path) -> None:
+    projected = tmp_path / "runtime.env"
+    projected.write_text("export HERMES_ENTRYPOINT_TEST_VALUE=safe-test-value\n", encoding="utf-8")
+    for legacy_name in (".env", ".op.env"):
+        hermes_home = tmp_path / legacy_name.replace(".", "legacy-")
+        hermes_home.mkdir()
+        (hermes_home / legacy_name).write_text("HERMES_LEGACY_TEST_VALUE=legacy\n", encoding="utf-8")
+        result = subprocess.run(
+            ["sh", str(ROOT / "deploy/hermes-entrypoint.sh"), "true"],
+            cwd=ROOT,
+            env={
+                **os.environ,
+                "HERMES_HOME": str(hermes_home),
+                "HERMES_PROJECTED_ENV_FILE": str(projected),
+            },
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert result.returncode == 78
+        assert legacy_name in result.stderr
+        assert "protected rollback backup" in result.stderr
+        assert "empty file or /dev/null" in result.stderr
+
+
 def test_prepull_contract_is_digest_only_and_docker_viewport_socket() -> None:
     script = (ROOT / "deploy/prepull-ghcr-image.sh").read_text(encoding="utf-8")
     assert "readonly HERMES_PREPULL_SECRETS_FILE=\"/srv/viewport/secrets/platformx.env\"" in script
@@ -160,6 +186,8 @@ def test_stage_compose_is_isolated_from_production() -> None:
     assert desired["secrets"]["projectorProfile"] == "stage"
     assert desired["secrets"]["allowedProjectedKeys"] == []
     assert desired["secrets"]["emptyProjectionAllowed"] is True
+    assert desired["runtimeIsolation"]["legacyEnvExclusion"]["required"] is True
+    assert desired["runtimeIsolation"]["legacyEnvExclusion"]["forbiddenFiles"] == [".env", ".op.env"]
     for key in desired["requiredVariables"]:
         assert f"${{{key}:" in stage or key == "HERMES_STAGE_IMAGE"
     assert "project-platformx-env.mjs /run/platformx.env" in stage

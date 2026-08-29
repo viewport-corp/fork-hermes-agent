@@ -31,9 +31,18 @@
     "backupBeforeDeploy": [
       "Record current Dokploy composeId kl7tmNAE6_kbE_c7q6l2I settings without secret values.",
       "Record current immutable image digest and current container inspect labels.",
-      "Snapshot /srv/viewport/runtime/hermes-viewport-new using the approved VPS backup path before any runtime deployment."
+      "Snapshot /srv/viewport/runtime/hermes-viewport-new using the approved VPS backup path before any runtime deployment.",
+      "Move any /srv/viewport/runtime/hermes-viewport-new/.env or .op.env file to a protected rollback backup only after the full state backup; deployment must fail while either legacy env file remains in HERMES_HOME."
     ]
   },
   "upstreamReleaseCommit": "5fc308a70719a83cccdbba4c0e39c23f5a8239d5",
-  "imageSourceRevision": "from GHCR publish workflow source_sha/digest after merge"
+  "imageSourceRevision": "from GHCR publish workflow source_sha/digest after merge",
+  "stateEnvMigration": {
+    "legacyFilesBlockDeploy": [
+      ".env",
+      ".op.env"
+    ],
+    "reason": "Hermes source loads env files from HERMES_HOME with override semantics, which would supersede canonical projected secrets.",
+    "requiredAction": "After the full state backup and before production deploy, move any HERMES_HOME legacy env file to a protected rollback backup; do not leave an empty file or /dev/null replacement."
+  }
 }
