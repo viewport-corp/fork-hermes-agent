@@ -166,6 +166,20 @@ COPY --from=node_source /usr/local/lib/node_modules/npm /usr/local/lib/node_modu
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
     ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
+# ---------- Agent CLI toolbox ----------
+# Claude Code, Gemini CLI, and Codex CLI installed globally so the hermes
+# agent (and operators via `docker exec`) can drive any of the three coding
+# agents from inside the container — previously codex was installed ad-hoc
+# in the live container and evaporated on recreation. Globals land in
+# /usr/local/bin, readable by any runtime UID. Versions are pinned (hadolint
+# DL3016 + the same supply-chain stance as the s6-overlay tarballs below);
+# bumping is a one-line change here. Viewport fork: #6.
+RUN npm install -g --no-audit --no-fund \
+        @anthropic-ai/claude-code@2.1.170 \
+        @google/gemini-cli@0.46.0 \
+        @openai/codex@0.139.0 && \
+    npm cache clean --force
+
 WORKDIR /opt/hermes
 
 # ---------- Layer-cached dependency install ----------
@@ -403,6 +417,14 @@ ENV HERMES_DISABLE_LAZY_INSTALLS=1
 # on the /opt/data volume, so it persists across container recreates / image
 # updates (an ABI stamp invalidates it if a rebuild bumps the interpreter).
 ENV HERMES_LAZY_INSTALL_TARGET=/opt/data/lazy-packages
+
+# Persist Claude Code state across container recreation. CLAUDE_CONFIG_DIR
+# (documented Claude Code env var) relocates ~/.claude onto the persistent
+# /opt/data volume, and — unlike relying on $HOME — also holds for root
+# `docker exec` shells where HOME=/root would otherwise put state on the
+# ephemeral layer. Gemini (~/.gemini) and codex (~/.codex) persist naturally
+# for supervised processes because the hermes user's home is /opt/data.
+ENV CLAUDE_CONFIG_DIR=/opt/data/claude-home
 
 # `docker exec` privilege-drop shim. When operators run
 # `docker exec <c> hermes ...` they default to root, and any file the
