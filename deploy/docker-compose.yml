@@ -1,42 +1,126 @@
-# /srv/viewport/deploy/hermes/docker-compose.yml
-# Build context = upstream fork at /srv/viewport/forks/hermes-agent
-# Daemon = docker-viewport (DOCKER_HOST=unix:///var/run/docker-viewport.sock)
-# Network = bridge on dvp0 (NOT host mode — overrides upstream)
-# Auth = Codex OAuth via /opt/data/.codex/auth.json (chown 10000:10000)
-# State = MIGRATED COPY at /srv/viewport/runtime/hermes-viewport-new (original /srv/viewport/runtime/hermes frozen as backup, #462)
+# Dokploy compose contract for Viewport Hermes.
+#
+# Dokploy source:
+#   source type: git/customGitUrl (no GitHub provider required)
+#   customGitUrl: https://github.com/viewport-corp/fork-hermes-agent.git
+#   customGitBranch: main
+#   upstream release commit: 5fc308a70719a83cccdbba4c0e39c23f5a8239d5
+#   compose path: deploy/docker-compose.yml
+#   composeId: kl7tmNAE6_kbE_c7q6l2I
+#
+# Runtime boundaries:
+#   - Deploy only on NEW Dokploy.
+#   - Do not use the old host clone at /srv/viewport/forks/hermes-agent.
+#   - Project only approved runtime secrets from /srv/viewport/secrets/platformx.env.
+#   - Preserve the existing state at /srv/viewport/runtime/hermes-viewport-new.
+#   - Before deploy, replace HERMES_IMAGE with the exact fork GHCR digest
+#     emitted by the post-merge publish workflow.
+name: fork-hermes-agent
+
+x-hermes-image: &hermes-image ${HERMES_IMAGE:?set immutable ghcr.io/viewport-corp/fork-hermes-agent@sha256:<digest> from main publish before deploy}
+
 services:
-  gateway:
-    build:
-      context: /srv/viewport/forks/hermes-agent
-      dockerfile: Dockerfile
-    image: viewport-corp/hermes-agent:v2026.8.19
-    container_name: hermes
+  secret-init:
+    image: *hermes-image
+    pull_policy: if_not_present
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - node /opt/hermes/deploy/project-platformx-env.mjs /run/platformx.env /run/hermes-secrets/runtime.env production && exec sleep infinity
+    network_mode: none
     restart: unless-stopped
-    networks: [viewport]
-    env_file: /srv/viewport/secrets/hermes.env
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN]
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test -f /run/hermes-secrets/runtime.env && test "$$(stat -c %u:%g:%a /run/hermes-secrets/runtime.env)" = 10000:10000:400
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    volumes:
+      - type: bind
+        source: /srv/viewport/secrets/platformx.env
+        target: /run/platformx.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: volume
+        source: projected-secrets
+        target: /run/hermes-secrets
+
+  hermes:
+    image: *hermes-image
+    pull_policy: if_not_present
+    container_name: hermes-viewport
+    restart: unless-stopped
+    entrypoint: ["/opt/hermes/deploy/hermes-entrypoint.sh"]
+    command: ["gateway", "run"]
     environment:
       - HERMES_UID=10000
       - HERMES_GID=10000
+      - HERMES_DASHBOARD=true
+      - HERMES_DASHBOARD_HOST=0.0.0.0
+      - HERMES_DASHBOARD_PORT=9119
+      - HERMES_GATEWAY_BOOTSTRAP_STATE=running
+      - HERMES_PROJECTED_ENV_FILE=/run/hermes-secrets/runtime.env
+    depends_on:
+      secret-init:
+        condition: service_healthy
+    networks:
+      default:
+        # Existing NEW Dokploy public edge targets this compose-network address.
+        ipv4_address: ${HERMES_IPV4_ADDRESS:-172.31.15.2}
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 9119
+        published: "${HERMES_DASHBOARD_HOST_PORT:-49119}"
+        protocol: tcp
     volumes:
-      - /srv/viewport/runtime/hermes-viewport-new:/opt/data
-    command: ["gateway", "run"]
+      - type: volume
+        source: projected-secrets
+        target: /run/hermes-secrets
+        read_only: true
+      - type: bind
+        source: /srv/viewport/runtime/hermes-viewport-new
+        target: /opt/data
+        bind:
+          create_host_path: false
+    stop_grace_period: 60s
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "python3 -c \"import json,sys; s=json.load(open('/opt/data/gateway_state.json')); sys.exit(0 if s.get('gateway_state') == 'running' and s.get('platforms', {}).get('telegram', {}).get('state') == 'connected' else 1)\"",
-        ]
-      interval: 60s
-      timeout: 10s
-      retries: 3
+        - CMD
+        - python3
+        - -c
+        - "import json,sys,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:9119/api/health', timeout=5); data=json.load(r); sys.exit(0 if getattr(r, 'status', 200) == 200 and data.get('ok') is True else 1)"
+      interval: 30s
+      timeout: 8s
+      retries: 5
       start_period: 90s
     labels:
       - "viewport.tier=tier-0"
       - "viewport.role=operator-harness"
+      - "viewport.source=github"
+      - "viewport.hermes.release=v2026.8.27"
+      - "viewport.hermes.upstream_release_commit=5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
+      - "viewport.hermes.image_source_revision=${HERMES_IMAGE_SOURCE_REVISION:-set-by-ghcr-publish-digest}"
       - "traefik.enable=false"
 
-networks:
-  viewport:
-    driver: bridge
+volumes:
+  projected-secrets:
+    name: ${HERMES_SECRET_VOLUME_NAME:-viewport-hermes-runtime-secrets}
+    driver: local
     driver_opts:
-      com.docker.network.bridge.name: viewport0
+      type: tmpfs
+      device: tmpfs
+      o: uid=0,gid=0,mode=0711,size=65536
+
+networks:
+  default:
+    name: ${HERMES_NETWORK_NAME:-fork-hermes-agent_default}
+    external: true
