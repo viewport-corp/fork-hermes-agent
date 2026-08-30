@@ -1,0 +1,66 @@
+name: Upstream sync
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Sync latest stable upstream release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_REPO: NousResearch/hermes-agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch upstream --tags
+          mapfile -t release < <(gh api "repos/${UPSTREAM_REPO}/releases/latest" \
+            --jq '[.tag_name, .html_url] | .[]')
+          tag="${release[0]}"
+          release_url="${release[1]}"
+          tag_ref="refs/tags/${tag}"
+          tag_commit="${tag_ref}^{commit}"
+          git rev-parse --verify "$tag_commit" >/dev/null
+          if git merge-base --is-ancestor "$tag_commit" origin/main; then
+            exit 0
+          fi
+          branch="sync/upstream-${tag}"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            git fetch origin "$branch"
+            git checkout -B "$branch" "origin/${branch}"
+          else
+            git checkout -b "$branch" origin/main
+          fi
+          if ! git merge --no-edit "$tag_ref"; then
+            git merge --abort || true
+            title="sync: conflict merging upstream ${tag}"
+            body="$(printf 'Automatic upstream sync could not merge %s.\n\nUpstream release: %s\nBranch attempted: %s\n\nPlease resolve the conflict manually.' "$tag" "$release_url" "$branch")"
+            if ! gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+              --search "\"${title}\" in:title" --json number --jq '.[0].number // empty' | grep -q .; then
+              gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+            fi
+            exit 1
+          fi
+          git push -u origin "$branch"
+          diffstat="$(git diff --stat origin/main...HEAD)"
+          pr_body="$(printf 'Upstream tag: %s\nRelease: %s\n\nDiffstat:\n```text\n%s\n```' "$tag" "$release_url" "$diffstat")"
+          pr_number="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$branch" \
+            --base main --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "$pr_number" ]]; then
+            gh pr edit "$pr_number" --repo "$GITHUB_REPOSITORY" \
+              --title "sync: upstream ${tag}" --body "$pr_body"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+              --title "sync: upstream ${tag}" --body "$pr_body"
+          fi
