@@ -35,8 +35,7 @@ jobs:
           if git merge-base --is-ancestor "$tag_commit" origin/main; then
             exit 0
           fi
-          safe_tag="${tag//\//-}"
-          branch="sync/upstream-${safe_tag}"
+          branch="sync/upstream-${tag}"
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
             git fetch origin "$branch"
             git checkout -B "$branch" "origin/${branch}"
