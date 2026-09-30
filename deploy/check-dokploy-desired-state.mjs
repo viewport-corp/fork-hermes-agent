@@ -56,6 +56,12 @@ assert.doesNotMatch(compose, /hermes-viewport-new|:latest\b/u);
 assert.match(compose, /\n      TELEGRAM_BOT_TOKEN: \$\{HERMES_TELEGRAM_BOT_TOKEN:\?/u);
 assert.doesNotMatch(compose, /\$\{TELEGRAM_BOT_TOKEN/u);
 assert.match(compose, /\n      LITELLM_HERMES_KEY: \$\{LITELLM_HERMES_KEY:\?/u);
+for (const name of desired.secrets.requiredEnv.filter((key) => key !== "HERMES_TELEGRAM_BOT_TOKEN")) {
+  assert.ok(compose.includes(`\n      ${name}: \${${name}:?`), `compose must require ${name}`);
+}
+for (const name of desired.secrets.optionalEnv) {
+  assert.ok(compose.includes(`\n      ${name}: \${${name}:-}\n`), `compose must pass optional ${name}`);
+}
 assert.match(compose, /HERMES_UID: "10000"/u);
 assert.match(compose, /\n      - "127\.0\.0\.1:9119:9119"\n/u);
 assert.match(compose, /\n    network_mode: bridge\n/u);

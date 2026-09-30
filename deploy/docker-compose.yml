@@ -52,6 +52,8 @@ services:
       TELEGRAM_HOME_CHANNEL_NAME: ${TELEGRAM_HOME_CHANNEL_NAME:-}
       HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:?set dashboard basic auth username}
       HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:?set dashboard basic auth password}
+      # Session signing key (32+ random bytes). Blank = random per process, so dashboard logins drop on every restart.
+      HERMES_DASHBOARD_BASIC_AUTH_SECRET: ${HERMES_DASHBOARD_BASIC_AUTH_SECRET:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # Read by config.yaml fallback_providers entries through key_env (LiteLLM virtual key alias hermes-viewport).
       LITELLM_HERMES_KEY: ${LITELLM_HERMES_KEY:?set LiteLLM virtual key for the Hermes fallback chain}
