@@ -1,51 +1,26 @@
 # Git-owned isolated Dokploy stage compose for Hermes.
 #
 # This is intentionally separate from deploy/docker-compose.yml because production
-# state, public edge IPs, and production secret projection must not be reused for stage.
+# state, published ports, bot tokens and other secrets must not be reused for stage.
+# Stage runs the same OFFICIAL upstream image family as production. It receives no
+# secrets at all, and it refuses to start if the stage state copy still holds a legacy
+# .env/.op.env (a copied live Telegram token would fight the live bot with a 409).
 name: ${HERMES_STAGE_PROJECT_NAME:?set isolated Dokploy stage project name}
 
-x-hermes-stage-image: &hermes-stage-image ${HERMES_STAGE_IMAGE:?set immutable ghcr.io/viewport-corp/fork-hermes-agent@sha256:<digest> for stage}
+x-hermes-stage-image: &hermes-stage-image ${HERMES_STAGE_IMAGE:?set immutable docker.io/nousresearch/hermes-agent:<tag>@sha256:<digest> for stage}
 
 services:
-  secret-init:
-    image: *hermes-stage-image
-    pull_policy: if_not_present
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - node /opt/hermes/deploy/project-platformx-env.mjs /run/platformx.env /run/hermes-stage-secrets/runtime.env stage && exec sleep infinity
-    network_mode: none
-    restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    cap_add: [CHOWN]
-    security_opt:
-      - no-new-privileges:true
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - test -f /run/hermes-stage-secrets/runtime.env && test "$$(stat -c %u:%g:%a /run/hermes-stage-secrets/runtime.env)" = 10000:10000:400
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
-    volumes:
-      - type: bind
-        source: /srv/viewport/secrets/platformx.env
-        target: /run/platformx.env
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: volume
-        source: stage-projected-secrets
-        target: /run/hermes-stage-secrets
-
   hermes-stage:
     image: *hermes-stage-image
     pull_policy: if_not_present
     container_name: ${HERMES_STAGE_CONTAINER_NAME:?set isolated stage container name}
     restart: unless-stopped
-    entrypoint: ["/opt/hermes/deploy/hermes-entrypoint.sh"]
+    # Guard, then hand over to the upstream entrypoint with exec (keeps PID 1 for s6 /init).
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - 'for f in /opt/data/.env /opt/data/.op.env; do if [ -e "$$f" ] || [ -L "$$f" ]; then echo "Hermes stage state holds legacy env file $$f; recopy state with the .env* exclude list" >&2; exit 78; fi; done; exec /opt/hermes/docker/entrypoint-dispatch.sh "$$@"'
+      - hermes-stage-guard
     command: ["gateway", "run"]
     environment:
       - HERMES_UID=10000
@@ -54,18 +29,10 @@ services:
       - HERMES_DASHBOARD_HOST=127.0.0.1
       - HERMES_DASHBOARD_PORT=9119
       - HERMES_GATEWAY_BOOTSTRAP_STATE=running
-      - HERMES_PROJECTED_ENV_FILE=/run/hermes-stage-secrets/runtime.env
-    depends_on:
-      secret-init:
-        condition: service_healthy
     networks:
       stage:
         ipv4_address: ${HERMES_STAGE_IPV4_ADDRESS:?set isolated stage container IP inside HERMES_STAGE_SUBNET}
     volumes:
-      - type: volume
-        source: stage-projected-secrets
-        target: /run/hermes-stage-secrets
-        read_only: true
       - type: bind
         source: ${HERMES_STAGE_STATE_DIR:?set isolated stage state dir, not production state}
         target: /opt/data
@@ -88,15 +55,6 @@ services:
       - "viewport.source=github"
       - "viewport.hermes.stage=true"
       - "traefik.enable=false"
-
-volumes:
-  stage-projected-secrets:
-    name: ${HERMES_STAGE_SECRET_VOLUME_NAME:?set isolated stage secret volume name}
-    driver: local
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
-      o: uid=0,gid=0,mode=0711,size=65536
 
 networks:
   stage:

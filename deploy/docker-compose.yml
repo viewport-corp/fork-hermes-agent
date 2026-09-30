@@ -4,91 +4,78 @@
 #   source type: git/customGitUrl (no GitHub provider required)
 #   customGitUrl: https://github.com/viewport-corp/fork-hermes-agent.git
 #   customGitBranch: main
-#   upstream release commit: 5fc308a70719a83cccdbba4c0e39c23f5a8239d5
 #   compose path: deploy/docker-compose.yml
 #   composeId: kl7tmNAE6_kbE_c7q6l2I
 #
+# Image: the OFFICIAL upstream release image, pinned by tag AND digest
+# (release v2026.9.24, peeled commit f97608f178d1ffeca59860195ab7da295f7c8e5f,
+# which is also the image's org.opencontainers.image.revision label).
+#
 # Runtime boundaries:
-#   - Deploy only on NEW Dokploy.
-#   - Do not use the old host clone at /srv/viewport/forks/hermes-agent.
-#   - Project only approved runtime secrets from /srv/viewport/secrets/platformx.env.
-#   - Preserve the existing state at /srv/viewport/runtime/hermes-viewport-new.
-#   - Before deploy, replace HERMES_IMAGE with the exact fork GHCR digest
-#     emitted by the post-merge publish workflow.
+#   - Deploy only on NEW Dokploy (docker-viewport daemon).
+#   - State is the LIVE folder /srv/viewport/runtime/hermes-viewport-v2026-8-27.
+#     Take the full backup in dokploy.desired-state.json rollback.backupBeforeDeploy first.
+#   - The upstream entrypoint is kept (s6-overlay /init as PID 1). It starts as root
+#     and drops every supervised process to the image's hermes user (UID 10000).
+#     Do not set `user:`; upstream stage2-hook.sh refuses arbitrary --user UIDs.
+#   - The legacy /opt/data/.env stays. Upstream reads it (override=True), so every key
+#     it holds wins over the values below; keep them equal (hash check only).
+#   - Secret VALUES live only in the Dokploy compose env (written next to this file
+#     as .env by Dokploy). Git holds env var NAMES only.
+#   - HERMES_TELEGRAM_BOT_TOKEN is Hermes' OWN bot. Never copy platformx.env
+#     TELEGRAM_BOT_TOKEN (OpenClaw's bot) into it: two pollers on one bot = Telegram 409.
 name: fork-hermes-agent
 
-x-hermes-image: &hermes-image ${HERMES_IMAGE:?set immutable ghcr.io/viewport-corp/fork-hermes-agent@sha256:<digest> from main publish before deploy}
+x-hermes-image: &hermes-image docker.io/nousresearch/hermes-agent:v2026.9.24@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7
 
 services:
-  secret-init:
-    image: *hermes-image
-    pull_policy: if_not_present
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - node /opt/hermes/deploy/project-platformx-env.mjs /run/platformx.env /run/hermes-secrets/runtime.env production && exec sleep infinity
-    network_mode: none
-    restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    cap_add: [CHOWN]
-    security_opt:
-      - no-new-privileges:true
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - test -f /run/hermes-secrets/runtime.env && test "$$(stat -c %u:%g:%a /run/hermes-secrets/runtime.env)" = 10000:10000:400
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 5s
-    volumes:
-      - type: bind
-        source: /srv/viewport/secrets/platformx.env
-        target: /run/platformx.env
-        read_only: true
-        bind:
-          create_host_path: false
-      - type: volume
-        source: projected-secrets
-        target: /run/hermes-secrets
-
   hermes:
     image: *hermes-image
     pull_policy: if_not_present
     container_name: hermes-viewport
     restart: unless-stopped
-    entrypoint: ["/opt/hermes/deploy/hermes-entrypoint.sh"]
     command: ["gateway", "run"]
-    environment:
-      - HERMES_UID=10000
-      - HERMES_GID=10000
-      - HERMES_DASHBOARD=true
-      - HERMES_DASHBOARD_HOST=0.0.0.0
-      - HERMES_DASHBOARD_PORT=9119
-      - HERMES_GATEWAY_BOOTSTRAP_STATE=running
-      - HERMES_PROJECTED_ENV_FILE=/run/hermes-secrets/runtime.env
-    depends_on:
-      secret-init:
-        condition: service_healthy
-    networks:
-      default:
-        # Existing NEW Dokploy public edge targets this compose-network address.
-        ipv4_address: ${HERMES_IPV4_ADDRESS:-172.31.15.2}
+    network_mode: bridge
     ports:
-      - mode: ingress
-        host_ip: 127.0.0.1
-        target: 9119
-        published: "${HERMES_DASHBOARD_HOST_PORT:-49119}"
-        protocol: tcp
+      # The edge route /etc/dokploy/traefik/dynamic/viewport-hermes.yml targets http://127.0.0.1:9119.
+      - "127.0.0.1:9119:9119"
+    environment:
+      HERMES_UID: "10000"
+      HERMES_GID: "10000"
+      HERMES_DASHBOARD: "1"
+      HERMES_DASHBOARD_PORT: "9119"
+      HERMES_TELEGRAM_DISABLE_FALLBACK_IPS: "true"
+      GATEWAY_ALLOW_ALL_USERS: "false"
+      TELEGRAM_BOT_TOKEN: ${HERMES_TELEGRAM_BOT_TOKEN:?set Hermes own bot token; must equal TELEGRAM_BOT_TOKEN in the live Hermes .env, never platformx.env TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:?set Hermes Telegram allowlist}
+      TELEGRAM_HOME_CHANNEL: ${TELEGRAM_HOME_CHANNEL:-}
+      TELEGRAM_HOME_CHANNEL_NAME: ${TELEGRAM_HOME_CHANNEL_NAME:-}
+      HERMES_DASHBOARD_BASIC_AUTH_USERNAME: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:?set dashboard basic auth username}
+      HERMES_DASHBOARD_BASIC_AUTH_PASSWORD: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:?set dashboard basic auth password}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Read by config.yaml fallback_providers entries through key_env (LiteLLM virtual key alias hermes-viewport).
+      LITELLM_HERMES_KEY: ${LITELLM_HERMES_KEY:?set LiteLLM virtual key for the Hermes fallback chain}
     volumes:
-      - type: volume
-        source: projected-secrets
-        target: /run/hermes-secrets
-        read_only: true
       - type: bind
-        source: /srv/viewport/runtime/hermes-viewport-new
+        source: /srv/viewport/runtime/hermes-viewport-v2026-8-27
         target: /opt/data
+        bind:
+          create_host_path: false
+      # Live feature: Hermes runs docker commands against the viewport daemon (ops agent).
+      # Upstream stage2-hook.sh adds the socket's GID (988) to the hermes user; no group_add needed.
+      - type: bind
+        source: /run/docker-viewport.sock
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /srv/viewport
+        target: /host/srv/viewport
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /opt/platformx
+        target: /host/opt/platformx
         bind:
           create_host_path: false
     stop_grace_period: 60s
@@ -106,21 +93,6 @@ services:
       - "viewport.tier=tier-0"
       - "viewport.role=operator-harness"
       - "viewport.source=github"
-      - "viewport.hermes.release=v2026.8.27"
-      - "viewport.hermes.upstream_release_commit=5fc308a70719a83cccdbba4c0e39c23f5a8239d5"
-      - "viewport.hermes.image_source_revision=${HERMES_IMAGE_SOURCE_REVISION:-set-by-ghcr-publish-digest}"
+      - "viewport.hermes.release=v2026.9.24"
+      - "viewport.hermes.upstream_release_commit=f97608f178d1ffeca59860195ab7da295f7c8e5f"
       - "traefik.enable=false"
-
-volumes:
-  projected-secrets:
-    name: ${HERMES_SECRET_VOLUME_NAME:-viewport-hermes-runtime-secrets}
-    driver: local
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
-      o: uid=0,gid=0,mode=0711,size=65536
-
-networks:
-  default:
-    name: ${HERMES_NETWORK_NAME:-fork-hermes-agent_default}
-    external: true

@@ -5,44 +5,70 @@
   "customGitBranch": "main",
   "composePath": "deploy/docker-compose.yml",
   "composeType": "docker-compose",
-  "image": "ghcr.io/viewport-corp/fork-hermes-agent@sha256:<replace-after-main-publish>",
-  "imageMergeGate": "Replace with the exact digest emitted by Docker Build, Test, and Publish / Publish fork image to GHCR before merging this deployment contract.",
+  "image": "docker.io/nousresearch/hermes-agent:v2026.9.24@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7",
+  "imageSource": "Official upstream release image. Digest is the OCI index digest read from registry-1.docker.io for tag v2026.9.24; never a floating tag.",
+  "upstreamRelease": "v2026.9.24",
+  "upstreamReleaseCommit": "f97608f178d1ffeca59860195ab7da295f7c8e5f",
+  "stateDir": "/srv/viewport/runtime/hermes-viewport-v2026-8-27",
+  "entrypoint": "upstream image default (/opt/hermes/docker/entrypoint-dispatch.sh -> s6-overlay /init); no override",
+  "runtimeUser": "container starts as root; s6 drops supervised processes to the image hermes user UID 10000 (HERMES_UID/HERMES_GID=10000)",
   "secrets": {
-    "source": "/srv/viewport/secrets/platformx.env",
-    "projectedRuntimeFile": "/run/hermes-secrets/runtime.env",
+    "source": "Dokploy compose env for composeId kl7tmNAE6_kbE_c7q6l2I (written by Dokploy as .env next to the compose file); names only in Git",
     "persistRegistryCredentialsInDokploy": false,
-    "dashboardAuthMigrationPrerequisite": "Before production projection, platformx.env must contain one dashboard auth method: basic username plus password/hash, or OAuth client id, or OIDC issuer plus client id. No secret values are stored in Git or Dokploy metadata."
+    "requiredEnv": [
+      "HERMES_TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_ALLOWED_USERS",
+      "HERMES_DASHBOARD_BASIC_AUTH_USERNAME",
+      "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD",
+      "LITELLM_HERMES_KEY"
+    ],
+    "optionalEnv": [
+      "TELEGRAM_HOME_CHANNEL",
+      "TELEGRAM_HOME_CHANNEL_NAME",
+      "OPENROUTER_API_KEY"
+    ],
+    "telegramBotToken": {
+      "dokployEnvName": "HERMES_TELEGRAM_BOT_TOKEN",
+      "containerEnvName": "TELEGRAM_BOT_TOKEN",
+      "mustEqual": "TELEGRAM_BOT_TOKEN in /srv/viewport/runtime/hermes-viewport-v2026-8-27/.env (compare sha256 prefixes only, never print values)",
+      "mustNotEqual": "TELEGRAM_BOT_TOKEN in /srv/viewport/secrets/platformx.env (OpenClaw's bot; sharing one bot token between two pollers causes Telegram 409 and breaks both)"
+    }
+  },
+  "legacyStateEnv": {
+    "file": "/opt/data/.env",
+    "policy": "keep",
+    "reason": "The upstream image reads API keys from /opt/data/.env and loads it with override=True, so keys present there win over compose env. The fork secret-init entrypoint (exit 78 on this file) is not used by this contract. Nothing is moved or deleted."
   },
   "dashboard": {
     "healthcheck": "http://127.0.0.1:9119/api/health",
-    "publicEdgeTarget": "172.31.15.2:9119",
-    "secretMigrationContract": "Dashboard auth secrets are a required migration prerequisite in platformx.env; this PR does not claim current values exist and does not store them in Git or Dokploy metadata."
+    "hostPublish": "127.0.0.1:9119:9119",
+    "publicEdgeTarget": "http://127.0.0.1:9119",
+    "auth": "basic auth via HERMES_DASHBOARD_BASIC_AUTH_USERNAME/PASSWORD (required on the default non-loopback bind)"
   },
   "network": {
-    "external": true,
-    "name": "fork-hermes-agent_default",
-    "nameEnv": "HERMES_NETWORK_NAME",
-    "gatewayService": "hermes",
-    "gatewayIpv4Address": "172.31.15.2",
-    "gatewayIpv4AddressEnv": "HERMES_IPV4_ADDRESS"
+    "mode": "bridge"
   },
-  "rollback": {
-    "method": "Restore the previous Dokploy desired-state record and immutable image digest, then redeploy from GitHub. If the new digest was pre-pulled only, remove it from docker-viewport after rollback validation.",
-    "backupBeforeDeploy": [
-      "Record current Dokploy composeId kl7tmNAE6_kbE_c7q6l2I settings without secret values.",
-      "Record current immutable image digest and current container inspect labels.",
-      "Snapshot /srv/viewport/runtime/hermes-viewport-new using the approved VPS backup path before any runtime deployment.",
-      "Move any /srv/viewport/runtime/hermes-viewport-new/.env or .op.env file to a protected rollback backup only after the full state backup; deployment must fail while either legacy env file remains in HERMES_HOME."
+  "hostMounts": {
+    "dockerSocket": {
+      "source": "/run/docker-viewport.sock",
+      "target": "/var/run/docker.sock",
+      "decision": "keep: live Hermes runs docker commands against the viewport daemon; upstream stage2-hook adds the socket GID to the hermes user"
+    },
+    "hostDirs": [
+      "/srv/viewport:/host/srv/viewport",
+      "/opt/platformx:/host/opt/platformx"
     ]
   },
-  "upstreamReleaseCommit": "5fc308a70719a83cccdbba4c0e39c23f5a8239d5",
-  "imageSourceRevision": "from GHCR publish workflow source_sha/digest after merge",
-  "stateEnvMigration": {
-    "legacyFilesBlockDeploy": [
-      ".env",
-      ".op.env"
-    ],
-    "reason": "Hermes source loads env files from HERMES_HOME with override semantics, which would supersede canonical projected secrets.",
-    "requiredAction": "After the full state backup and before production deploy, move any HERMES_HOME legacy env file to a protected rollback backup; do not leave an empty file or /dev/null replacement."
+  "rollback": {
+    "method": "Dokploy compose.stop for kl7tmNAE6_kbE_c7q6l2I, then docker start the stopped previous container hermes-viewport-v2026-8-27 (previous image sha256:dcf3b96c40d1b1bbe64c448be102ca97146f66df91a4f228d4ae581bc841fadd, local only; never prune it). If state is damaged, restore the backup below into a NEW sibling folder and point the compose there; never rsync --delete over live state.",
+    "backupDir": "/srv/viewport/backups/hermes-viewport-<UTC>",
+    "backupBeforeDeploy": [
+      "Check df -h /srv has room for the state folder (about 58G) plus margin.",
+      "install -d -m 700 /srv/viewport/backups/hermes-viewport-<UTC>",
+      "Save docker inspect hermes-viewport-v2026-8-27 and the Dokploy compose.one record for kl7tmNAE6_kbE_c7q6l2I into the backup dir (mode 600; they hold secret values).",
+      "Pass 1 while running: rsync -aHAX --numeric-ids /srv/viewport/runtime/hermes-viewport-v2026-8-27/ /srv/viewport/backups/hermes-viewport-<UTC>/state/ (no --delete).",
+      "docker stop hermes-viewport-v2026-8-27 (stop only, never rm), then rsync pass 2 into the same backup state dir.",
+      "Pre-pull the pinned digest into docker-viewport with deploy/prepull-ghcr-image.sh before compose.deploy."
+    ]
   }
 }

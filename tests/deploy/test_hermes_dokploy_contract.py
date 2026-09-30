@@ -120,15 +120,62 @@ def test_projector_gates_production_without_dashboard_auth(tmp_path: Path) -> No
     assert "dashboard auth migration keys" in result.stderr
 
 
-def test_secret_init_healthchecks_use_metadata_not_read_permission() -> None:
+def test_production_uses_official_image_live_state_and_own_bot_token() -> None:
     prod = (ROOT / "deploy/docker-compose.yml").read_text(encoding="utf-8")
+    desired = json.loads((ROOT / "deploy/dokploy.desired-state.json").read_text(encoding="utf-8"))
+    assert desired["image"].startswith("docker.io/nousresearch/hermes-agent:v2026.9.24@sha256:")
+    assert f"x-hermes-image: &hermes-image {desired['image']}" in prod
+    assert "source: /srv/viewport/runtime/hermes-viewport-v2026-8-27\n        target: /opt/data" in prod
+    assert "hermes-viewport-new" not in prod
+    assert "TELEGRAM_BOT_TOKEN: ${HERMES_TELEGRAM_BOT_TOKEN:?" in prod
+    assert "${TELEGRAM_BOT_TOKEN" not in prod
+    assert "secret-init" not in prod
+    assert "\n    entrypoint:" not in prod
+    assert "\n    user:" not in prod
+    assert '"127.0.0.1:9119:9119"' in prod
+
+
+def test_checker_rejects_shared_openclaw_bot_token(tmp_path: Path) -> None:
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    for name in (
+        "dokploy.desired-state.json",
+        "dokploy.stage.desired-state.json",
+        "dokploy.stage.yml",
+        "docker-compose.yml",
+    ):
+        (deploy / name).write_text((ROOT / "deploy" / name).read_text(encoding="utf-8"), encoding="utf-8")
+    compose = deploy / "docker-compose.yml"
+    compose.write_text(
+        compose.read_text(encoding="utf-8").replace(
+            "${HERMES_TELEGRAM_BOT_TOKEN:?", "${TELEGRAM_BOT_TOKEN:?"
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["node", str(ROOT / "deploy/check-dokploy-desired-state.mjs")],
+        cwd=tmp_path,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert result.returncode != 0
+    assert "dokployDesiredStateSafe" not in result.stdout
+
+
+def test_stage_guard_refuses_legacy_state_env_files(tmp_path: Path) -> None:
     stage = (ROOT / "deploy/dokploy.stage.yml").read_text(encoding="utf-8")
-    assert "test -f /run/hermes-secrets/runtime.env" in prod
-    assert "test -r /run/hermes-secrets/runtime.env" not in prod
-    assert "stat -c %u:%g:%a /run/hermes-secrets/runtime.env" in prod
-    assert "test -f /run/hermes-stage-secrets/runtime.env" in stage
-    assert "test -r /run/hermes-stage-secrets/runtime.env" not in stage
-    assert "stat -c %u:%g:%a /run/hermes-stage-secrets/runtime.env" in stage
+    line = next(l for l in stage.splitlines() if "for f in /opt/data/.env" in l)
+    script = line.strip()[len("- '"):-1].replace("$$", "$").replace("/opt/data", str(tmp_path))
+    (tmp_path / ".op.env").write_text("X=1\n", encoding="utf-8")
+    result = subprocess.run(
+        ["sh", "-ec", script, "hermes-stage-guard", "gateway", "run"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert result.returncode == 78
+    assert ".op.env" in result.stderr
 
 
 def test_entrypoint_refuses_legacy_state_env_files(tmp_path: Path) -> None:
@@ -165,6 +212,7 @@ def test_prepull_contract_is_digest_only_and_docker_viewport_socket() -> None:
     assert "HERMES_PREPULL_IMAGE=\"$(python3" in script
     assert "@sha256:[a-f0-9]{64}" in script
     assert "--password-stdin" in script
+    assert "^docker\\.io/nousresearch/hermes-agent:v[0-9.]+@sha256:[a-f0-9]{64}$" in script
 
 
 def test_fork_publish_gate_skips_digest_pin_only_changes() -> None:
@@ -194,20 +242,19 @@ def test_stage_compose_is_isolated_from_production() -> None:
         (ROOT / "deploy/dokploy.stage.desired-state.json").read_text(encoding="utf-8")
     )
     assert desired["stageOnly"] is True
-    assert desired["secrets"]["projectorProfile"] == "stage"
+    assert desired["image"].startswith("docker.io/nousresearch/hermes-agent:")
+    assert desired["secrets"]["source"] == "none"
     assert desired["secrets"]["allowedProjectedKeys"] == []
-    assert desired["secrets"]["emptyProjectionAllowed"] is True
+    assert desired["runtimeIsolation"]["forbiddenProductionStateDir"] == "/srv/viewport/runtime/hermes-viewport-v2026-8-27"
     assert desired["runtimeIsolation"]["legacyEnvExclusion"]["required"] is True
     assert desired["runtimeIsolation"]["legacyEnvExclusion"]["forbiddenFiles"] == [".env", ".op.env"]
     for key in desired["requiredVariables"]:
-        assert f"${{{key}:" in stage or key == "HERMES_STAGE_IMAGE"
-    assert "project-platformx-env.mjs /run/platformx.env" in stage
-    assert "/run/hermes-stage-secrets/runtime.env stage" in stage
-    assert "test -f /run/hermes-stage-secrets/runtime.env" in stage
-    assert "test -r /run/hermes-stage-secrets/runtime.env" not in stage
-    assert "stat -c %u:%g:%a /run/hermes-stage-secrets/runtime.env" in stage
+        assert f"${{{key}:?" in stage
+    assert "platformx.env" not in stage
+    assert "secret-init" not in stage
+    assert "exec /opt/hermes/docker/entrypoint-dispatch.sh" in stage
     assert "ports:" not in stage
-    assert "172.31.15.2" not in stage
+    assert "hermes-viewport-v2026-8-27" not in stage
     assert "/srv/viewport/runtime/hermes-viewport-new" not in stage
     assert "HERMES_DASHBOARD_HOST=127.0.0.1" in stage
     assert "TELEGRAM_" not in stage
