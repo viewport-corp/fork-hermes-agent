@@ -6,21 +6,18 @@
   "composePath": "deploy/dokploy.stage.yml",
   "composeType": "docker-compose",
   "stageOnly": true,
-  "image": "ghcr.io/viewport-corp/fork-hermes-agent@sha256:<stage-reviewed-digest>",
+  "image": "docker.io/nousresearch/hermes-agent:v2026.9.24@sha256:fca358f12efd65bfaaca05884166f15c0e2788375ca30d77061ac1ebc96452b7",
   "requiredVariables": [
     "HERMES_STAGE_PROJECT_NAME",
     "HERMES_STAGE_CONTAINER_NAME",
     "HERMES_STAGE_STATE_DIR",
-    "HERMES_STAGE_SECRET_VOLUME_NAME",
     "HERMES_STAGE_NETWORK_NAME",
     "HERMES_STAGE_SUBNET",
     "HERMES_STAGE_IPV4_ADDRESS",
     "HERMES_STAGE_IMAGE"
   ],
   "secrets": {
-    "source": "/srv/viewport/secrets/platformx.env",
-    "projectedRuntimeFile": "/run/hermes-stage-secrets/runtime.env",
-    "projectorProfile": "stage",
+    "source": "none",
     "allowedProjectedKeys": [],
     "forbiddenProductionSecretClasses": [
       "TELEGRAM_*",
@@ -30,23 +27,21 @@
       "OPENROUTER_API_KEY",
       "GITHUB_TOKEN*"
     ],
-    "emptyProjectionAllowed": true,
-    "stageSecretContract": "Stage projection intentionally passes no production Telegram, model, GitHub, or dashboard secrets; internal health validation does not require them."
+    "stageSecretContract": "Stage receives no secrets: no platformx.env mount, no env_file, no Telegram, model, GitHub or dashboard secrets. Internal health validation does not need them."
   },
   "runtimeIsolation": {
     "noProductionStateMount": true,
-    "forbiddenProductionStateDir": "/srv/viewport/runtime/hermes-viewport-new",
+    "forbiddenProductionStateDir": "/srv/viewport/runtime/hermes-viewport-v2026-8-27",
     "noPublishedPorts": true,
     "noPublicEdgeIp": true,
-    "forbiddenPublicEdgeIp": "172.31.15.2",
     "healthcheck": "http://127.0.0.1:9119/api/health",
     "legacyEnvExclusion": {
       "required": true,
       "forbiddenFiles": [
-        ".env",
         ".op.env"
       ],
-      "reason": "Stage state snapshots must not carry production or legacy Hermes env files; the shared entrypoint also fails closed if either file exists in HERMES_HOME."
+      "envFilePolicy": "/opt/data/.env is allowed only as a regular file with no non-empty value for a secrets.forbiddenProductionSecretClasses key. The upstream image creates .env on first boot (stage2-hook.sh seed_one .env.example, then a generated API_SERVER_KEY), so refusing on existence would restart-loop stage.",
+      "reason": "Stage state snapshots must not carry production or legacy Hermes secrets (a copied live Telegram token would 409 the live bot); on every start the stage entrypoint guard fails closed with exit 78 on .op.env, a symlinked .env, or a .env holding a forbidden secret class."
     }
   }
 }

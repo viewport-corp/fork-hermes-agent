@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Pre-pull the reviewed private GHCR digest into the NEW Dokploy docker daemon.
+# Pre-pull the reviewed digest into the NEW Dokploy docker daemon. The official
+# docker.io/nousresearch/hermes-agent digest is public and pulled without login;
+# the private fork GHCR digest path below keeps its temporary-auth contract.
 # Contract: read only the canonical PlatformX secret file, use temporary Docker
 # auth under /run, pull the digest declared in deploy/dokploy.desired-state.json,
 # and never persist registry credentials in Dokploy or the host Docker config.
@@ -24,6 +26,12 @@ from pathlib import Path
 print(json.loads(Path(sys.argv[1]).read_text())["image"])
 PY
 )"
+if [[ "$HERMES_PREPULL_IMAGE" =~ ^docker\.io/nousresearch/hermes-agent:v[0-9.]+@sha256:[a-f0-9]{64}$ ]]; then
+  # Official upstream image is public: pull by digest without any registry login.
+  echo "Pulling official digest $HERMES_PREPULL_IMAGE into $HERMES_PREPULL_DOCKER_HOST (no registry auth)"
+  DOCKER_CONFIG="$HERMES_PREPULL_DOCKER_CONFIG" DOCKER_HOST="$HERMES_PREPULL_DOCKER_HOST" docker pull "$HERMES_PREPULL_IMAGE"
+  exit 0
+fi
 if [[ ! "$HERMES_PREPULL_IMAGE" =~ ^ghcr\.io/viewport-corp/fork-hermes-agent@sha256:[a-f0-9]{64}$ ]]; then
   echo "deploy/dokploy.desired-state.json image must be the exact reviewed GHCR digest" >&2
   exit 64
