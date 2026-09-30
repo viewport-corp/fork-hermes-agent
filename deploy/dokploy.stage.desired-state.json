@@ -38,10 +38,10 @@
     "legacyEnvExclusion": {
       "required": true,
       "forbiddenFiles": [
-        ".env",
         ".op.env"
       ],
-      "reason": "Stage state snapshots must not carry production or legacy Hermes env files (a copied live Telegram token would 409 the live bot); the stage entrypoint guard fails closed with exit 78 if either file exists in /opt/data."
+      "envFilePolicy": "/opt/data/.env is allowed only as a regular file with no non-empty value for a secrets.forbiddenProductionSecretClasses key. The upstream image creates .env on first boot (stage2-hook.sh seed_one .env.example, then a generated API_SERVER_KEY), so refusing on existence would restart-loop stage.",
+      "reason": "Stage state snapshots must not carry production or legacy Hermes secrets (a copied live Telegram token would 409 the live bot); on every start the stage entrypoint guard fails closed with exit 78 on .op.env, a symlinked .env, or a .env holding a forbidden secret class."
     }
   }
 }

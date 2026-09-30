@@ -3,8 +3,10 @@
 # This is intentionally separate from deploy/docker-compose.yml because production
 # state, published ports, bot tokens and other secrets must not be reused for stage.
 # Stage runs the same OFFICIAL upstream image family as production. It receives no
-# secrets at all, and it refuses to start if the stage state copy still holds a legacy
-# .env/.op.env (a copied live Telegram token would fight the live bot with a 409).
+# secrets at all. Its guard refuses to start if the stage state holds a legacy .op.env,
+# a symlinked .env, or a .env with a non-empty production secret (a copied live Telegram
+# token would fight the live bot with a 409). A .env without those keys is allowed: the
+# upstream image creates one on first boot (stage2-hook.sh seed_one + API_SERVER_KEY).
 name: ${HERMES_STAGE_PROJECT_NAME:?set isolated Dokploy stage project name}
 
 x-hermes-stage-image: &hermes-stage-image ${HERMES_STAGE_IMAGE:?set immutable docker.io/nousresearch/hermes-agent:<tag>@sha256:<digest> for stage}
@@ -15,11 +17,25 @@ services:
     pull_policy: if_not_present
     container_name: ${HERMES_STAGE_CONTAINER_NAME:?set isolated stage container name}
     restart: unless-stopped
-    # Guard, then hand over to the upstream entrypoint with exec (keeps PID 1 for s6 /init).
+    # Guard on every start, then hand over to the upstream entrypoint with exec (keeps PID 1
+    # for s6 /init). The key classes match secrets.forbiddenProductionSecretClasses.
     entrypoint:
       - /bin/sh
       - -ec
-      - 'for f in /opt/data/.env /opt/data/.op.env; do if [ -e "$$f" ] || [ -L "$$f" ]; then echo "Hermes stage state holds legacy env file $$f; recopy state with the .env* exclude list" >&2; exit 78; fi; done; exec /opt/hermes/docker/entrypoint-dispatch.sh "$$@"'
+      - |
+        if [ -e /opt/data/.op.env ] || [ -L /opt/data/.op.env ]; then
+          echo "Hermes stage state holds legacy env file /opt/data/.op.env; recopy state with the .env* exclude list" >&2
+          exit 78
+        fi
+        if [ -L /opt/data/.env ]; then
+          echo "Hermes stage state /opt/data/.env is a symlink; recopy state with the .env* exclude list" >&2
+          exit 78
+        fi
+        if [ -f /opt/data/.env ] && grep -Eq "^[[:space:]]*(export[[:space:]]+)?(TELEGRAM_[A-Z0-9_]*|HERMES_DASHBOARD_[A-Z0-9_]*|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|GITHUB_TOKEN[A-Z0-9_]*)[[:space:]]*=[[:space:]]*([^[:space:]#\"']|\"[^\"]|'[^'])" /opt/data/.env; then
+          echo "Hermes stage state /opt/data/.env holds a production secret key; recopy state with the .env* exclude list" >&2
+          exit 78
+        fi
+        exec /opt/hermes/docker/entrypoint-dispatch.sh "$$@"
       - hermes-stage-guard
     command: ["gateway", "run"]
     environment:

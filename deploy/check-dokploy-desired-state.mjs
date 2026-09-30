@@ -67,7 +67,8 @@ assert.equal(stageDesired.secrets.source, "none");
 assert.deepEqual(stageDesired.secrets.allowedProjectedKeys, []);
 assert.equal(stageDesired.runtimeIsolation.forbiddenProductionStateDir, liveStateDir);
 assert.equal(stageDesired.runtimeIsolation.legacyEnvExclusion.required, true);
-assert.deepEqual(stageDesired.runtimeIsolation.legacyEnvExclusion.forbiddenFiles, [".env", ".op.env"]);
+assert.deepEqual(stageDesired.runtimeIsolation.legacyEnvExclusion.forbiddenFiles, [".op.env"]);
+assert.match(stageDesired.runtimeIsolation.legacyEnvExclusion.envFilePolicy, /forbiddenProductionSecretClasses/u);
 assert.match(stageDesired.runtimeIsolation.legacyEnvExclusion.reason, /entrypoint guard fails closed/u);
 for (const key of [
   "HERMES_STAGE_PROJECT_NAME",
@@ -91,16 +92,31 @@ assert.ok(
     "name: ${HERMES_STAGE_NETWORK_NAME:?set isolated stage network name}",
   ),
 );
-assert.match(stageCompose, /for f in \/opt\/data\/\.env \/opt\/data\/\.op\.env; do/u);
-assert.match(stageCompose, /exit 78; fi; done; exec \/opt\/hermes\/docker\/entrypoint-dispatch\.sh "\$\$@"/u);
+// Stage guard: a literal block between "- |" and "- hermes-stage-guard" in the entrypoint.
+const stageGuardBlock = stageCompose.match(/\n      - \|\n((?:        .*\n)+)      - hermes-stage-guard\n/u);
+assert.ok(stageGuardBlock, "stage entrypoint guard block missing");
+const stageGuard = stageGuardBlock[1];
+assert.match(stageGuard, /if \[ -e \/opt\/data\/\.op\.env \] \|\| \[ -L \/opt\/data\/\.op\.env \]; then\n.*\n          exit 78\n/u);
+assert.match(stageGuard, /if \[ -L \/opt\/data\/\.env \]; then\n.*\n          exit 78\n/u);
+assert.match(stageGuard, /if \[ -f \/opt\/data\/\.env \] && grep -Eq ".*" \/opt\/data\/\.env; then\n.*\n          exit 78\n/u);
+const forbiddenKeyAlternation = stageDesired.secrets.forbiddenProductionSecretClasses
+  .map((keyClass) => (keyClass.endsWith("*") ? `${keyClass.slice(0, -1)}[A-Z0-9_]*` : keyClass))
+  .join("|");
+assert.ok(
+  stageGuard.includes(`(export[[:space:]]+)?(${forbiddenKeyAlternation})[[:space:]]*=`),
+  "stage guard must refuse every forbiddenProductionSecretClasses key",
+);
+assert.ok(stageGuard.endsWith('        exec /opt/hermes/docker/entrypoint-dispatch.sh "$$@"\n'));
 assert.match(stageCompose, /HERMES_DASHBOARD_HOST=127\.0\.0\.1/u);
 assert.match(stageCompose, /http:\/\/127\.0\.0\.1:9119\/api\/health/u);
 assert.doesNotMatch(stageCompose, /ports:/u);
 assert.doesNotMatch(stageCompose, /hermes-viewport-new|hermes-viewport-v2026-8-27/u);
 assert.doesNotMatch(stageCompose, /platformx\.env|secret-init|env_file|docker\.sock/u);
-assert.doesNotMatch(stageCompose, /TELEGRAM_/u);
+// Secret names may appear only inside the guard, which names them to refuse them.
+const stageComposeOutsideGuard = stageCompose.replace(stageGuardBlock[0], "\n");
+assert.doesNotMatch(stageComposeOutsideGuard, /TELEGRAM_/u);
 assert.doesNotMatch(
-  stageCompose,
+  stageComposeOutsideGuard,
   /OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|GITHUB_TOKEN|LITELLM_/u,
 );
 

@@ -163,19 +163,94 @@ def test_checker_rejects_shared_openclaw_bot_token(tmp_path: Path) -> None:
     assert "dokployDesiredStateSafe" not in result.stdout
 
 
-def test_stage_guard_refuses_legacy_state_env_files(tmp_path: Path) -> None:
-    stage = (ROOT / "deploy/dokploy.stage.yml").read_text(encoding="utf-8")
-    line = next(l for l in stage.splitlines() if "for f in /opt/data/.env" in l)
-    script = line.strip()[len("- '"):-1].replace("$$", "$").replace("/opt/data", str(tmp_path))
-    (tmp_path / ".op.env").write_text("X=1\n", encoding="utf-8")
-    result = subprocess.run(
+def _run_stage_guard(state_dir: Path) -> subprocess.CompletedProcess[str]:
+    """Run the stage entrypoint guard against state_dir; the upstream dispatcher is stubbed by echo."""
+    import yaml
+
+    stage = yaml.safe_load((ROOT / "deploy/dokploy.stage.yml").read_text(encoding="utf-8"))
+    shell, flags, script, argv0 = stage["services"]["hermes-stage"]["entrypoint"]
+    assert (shell, flags, argv0) == ("/bin/sh", "-ec", "hermes-stage-guard")
+    script = (
+        script.replace("$$", "$")
+        .replace("/opt/hermes/docker/entrypoint-dispatch.sh", "echo dispatched")
+        .replace("/opt/data", str(state_dir))
+    )
+    return subprocess.run(
         ["sh", "-ec", script, "hermes-stage-guard", "gateway", "run"],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
+
+
+def _stage_state(tmp_path: Path) -> Path:
+    state = tmp_path / "state"
+    state.mkdir(parents=True)
+    return state
+
+
+def test_stage_guard_allows_restart_after_upstream_seeds_env(tmp_path: Path) -> None:
+    state = _stage_state(tmp_path)
+    first = _run_stage_guard(state)
+    assert first.returncode == 0, first.stderr
+    assert first.stdout == "dispatched gateway run\n"
+    # What upstream stage2-hook.sh does on first boot: seed .env from .env.example,
+    # then persist a generated API_SERVER_KEY.
+    (state / ".env").write_text(
+        (ROOT / ".env.example").read_text(encoding="utf-8") + "API_SERVER_KEY=" + "a" * 64 + "\n",
+        encoding="utf-8",
+    )
+    second = _run_stage_guard(state)
+    assert second.returncode == 0, second.stderr
+    assert second.stdout == "dispatched gateway run\n"
+
+
+def test_stage_guard_allows_empty_or_commented_secret_keys(tmp_path: Path) -> None:
+    state = _stage_state(tmp_path)
+    (state / ".env").write_text(
+        "TELEGRAM_BOT_TOKEN=\n"
+        'OPENROUTER_API_KEY=""\n'
+        "GITHUB_TOKEN=  # set later\n"
+        "# TELEGRAM_BOT_TOKEN=123:commented\n"
+        "HERMES_TELEGRAM_BOT_TOKEN_NOTE=not-a-forbidden-class\n",
+        encoding="utf-8",
+    )
+    result = _run_stage_guard(state)
+    assert result.returncode == 0, result.stderr
+
+
+def test_stage_guard_refuses_copied_production_secrets(tmp_path: Path) -> None:
+    for index, line in enumerate(
+        (
+            "TELEGRAM_BOT_TOKEN=123456:live-bot",
+            "export TELEGRAM_BOT_TOKEN='123456:live-bot'",
+            '  HERMES_DASHBOARD_BASIC_AUTH_PASSWORD = "pw"',
+            "OPENAI_API_KEY=sk-test",
+            "GITHUB_TOKEN_VIEWPORT_CORP=ghp-test",
+        )
+    ):
+        state = _stage_state(tmp_path / str(index))
+        (state / ".env").write_text("API_SERVER_KEY=" + "a" * 64 + "\n" + line + "\n", encoding="utf-8")
+        result = _run_stage_guard(state)
+        assert result.returncode == 78, line
+        assert "production secret key" in result.stderr
+        assert "dispatched" not in result.stdout
+
+
+def test_stage_guard_refuses_legacy_op_env_and_symlinked_env(tmp_path: Path) -> None:
+    state = _stage_state(tmp_path / "op")
+    (state / ".op.env").write_text("X=1\n", encoding="utf-8")
+    result = _run_stage_guard(state)
     assert result.returncode == 78
     assert ".op.env" in result.stderr
+
+    state = _stage_state(tmp_path / "link")
+    target = tmp_path / "production.env"
+    target.write_text("API_SERVER_KEY=x\n", encoding="utf-8")
+    (state / ".env").symlink_to(target)
+    result = _run_stage_guard(state)
+    assert result.returncode == 78
+    assert "symlink" in result.stderr
 
 
 def test_entrypoint_refuses_legacy_state_env_files(tmp_path: Path) -> None:
@@ -247,7 +322,7 @@ def test_stage_compose_is_isolated_from_production() -> None:
     assert desired["secrets"]["allowedProjectedKeys"] == []
     assert desired["runtimeIsolation"]["forbiddenProductionStateDir"] == "/srv/viewport/runtime/hermes-viewport-v2026-8-27"
     assert desired["runtimeIsolation"]["legacyEnvExclusion"]["required"] is True
-    assert desired["runtimeIsolation"]["legacyEnvExclusion"]["forbiddenFiles"] == [".env", ".op.env"]
+    assert desired["runtimeIsolation"]["legacyEnvExclusion"]["forbiddenFiles"] == [".op.env"]
     for key in desired["requiredVariables"]:
         assert f"${{{key}:?" in stage
     assert "platformx.env" not in stage
@@ -257,6 +332,17 @@ def test_stage_compose_is_isolated_from_production() -> None:
     assert "hermes-viewport-v2026-8-27" not in stage
     assert "/srv/viewport/runtime/hermes-viewport-new" not in stage
     assert "HERMES_DASHBOARD_HOST=127.0.0.1" in stage
-    assert "TELEGRAM_" not in stage
-    assert "OPENAI_API_KEY" not in stage
-    assert "GITHUB_TOKEN" not in stage
+    # Secret names may appear only in the entrypoint guard, which refuses them.
+    import textwrap
+
+    import yaml
+
+    service = yaml.safe_load(stage)["services"]["hermes-stage"]
+    guard = textwrap.indent(service["entrypoint"][2], " " * 8)
+    assert guard in stage
+    outside_guard = stage.replace(guard, "")
+    assert "TELEGRAM_" not in outside_guard
+    assert "OPENAI_API_KEY" not in outside_guard
+    assert "GITHUB_TOKEN" not in outside_guard
+    for name in service["environment"]:
+        assert not name.startswith(("TELEGRAM_", "OPENAI_API_KEY", "GITHUB_TOKEN")), name
