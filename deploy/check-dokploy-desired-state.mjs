@@ -34,6 +34,12 @@ assert.ok(!desired.secrets.requiredEnv.includes("TELEGRAM_BOT_TOKEN"));
 assert.equal(desired.legacyStateEnv.policy, "keep");
 assert.equal(desired.dashboard.hostPublish, "127.0.0.1:9119:9119");
 assert.equal(desired.network.mode, "bridge");
+assert.ok(
+  desired.prerequisitesBeforeDeploy[0].includes(
+    `sourceType=git, customGitUrl=${desired.customGitUrl}, customGitBranch=${desired.customGitBranch}, composePath=${desired.composePath}`,
+  ),
+  "first deploy prerequisite must switch the Dokploy record to the Git source",
+);
 assert.match(desired.rollback.backupDir, /^\/srv\/viewport\/backups\//u);
 assert.ok(
   desired.rollback.backupBeforeDeploy.some((step) => step.includes(`${liveStateDir}/ ${desired.rollback.backupDir}/state/`)),

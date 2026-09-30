@@ -59,6 +59,11 @@
       "/opt/platformx:/host/opt/platformx"
     ]
   },
+  "prerequisitesBeforeDeploy": [
+    "Switch the Dokploy record kl7tmNAE6_kbE_c7q6l2I to this Git source first: today it is sourceType=raw, composePath=./docker-compose.yml, no customGitUrl/customGitBranch and an empty env (read-only Dokploy DB check, 2026-09-30). Set sourceType=git, customGitUrl=https://github.com/viewport-corp/fork-hermes-agent.git, customGitBranch=main, composePath=deploy/docker-compose.yml. A deploy of the raw record ignores this repo.",
+    "Put every secrets.requiredEnv name, plus the wanted secrets.optionalEnv names, into that record's env. Compose fails closed on a missing required name.",
+    "Run rollback.backupBeforeDeploy and record Sam's named approval for the live recreate in viewport-corp/viewport-ops#572."
+  ],
   "rollback": {
     "method": "Dokploy compose.stop for kl7tmNAE6_kbE_c7q6l2I, then docker start the stopped previous container hermes-viewport-v2026-8-27 (previous image sha256:dcf3b96c40d1b1bbe64c448be102ca97146f66df91a4f228d4ae581bc841fadd, local only; never prune it). If state is damaged, restore the backup below into a NEW sibling folder and point the compose there; never rsync --delete over live state.",
     "backupDir": "/srv/viewport/backups/hermes-viewport-<UTC>",
